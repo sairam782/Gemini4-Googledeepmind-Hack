@@ -112,6 +112,8 @@ export type DeskServerMsg =
   | { type: "agent.say"; turnId: string; text: string; revision: number; directionId: string | null; auto?: boolean }
   | { type: "agent.cut"; turnId: string }
   | { type: "agent.done"; turnId: string }
+  /** A short backchannel ("Mm-hm.") while the real reply loads; not a turn, never in the transcript. */
+  | { type: "agent.ack"; text: string }
   // The agent will say the best direction on its own in inMs unless Alex taps first (null directionId = cancelled).
   | { type: "agent.autoPick"; directionId: string | null; inMs: number; revision: number }
   | { type: "risk.signal"; sign: Sign }

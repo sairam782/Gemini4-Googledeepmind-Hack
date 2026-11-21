@@ -64,6 +64,7 @@ ws.on("message", (raw) => {
   const m = JSON.parse(String(raw)) as DeskServerMsg;
   if (m.type === "state") revision = m.revision;
   if (m.type === "turn.final") console.log(`${ts()} ${m.turn.speaker.padEnd(6)} ${m.turn.text}`);
+  if (m.type === "agent.ack") { if (midLine) { overlaps++; console.log(`${ts()}   !! OVERLAP: ack while the caller was mid-sentence`); } console.log(`${ts()}   .. ack "${m.text}"${stoppedAt ? `  [${((Date.now() - stoppedAt) / 1000).toFixed(1)} s after you stopped]` : ""}`); }
   if (m.type === "agent.say") { if (midLine) { overlaps++; console.log(`${ts()}   !! OVERLAP: agent spoke while the caller was mid-sentence`); } agentBusy = true; console.log(`${ts()}   >> agent says${m.auto ? " (auto)" : ""}${stoppedAt ? `  [${((Date.now() - stoppedAt) / 1000).toFixed(1)} s after you stopped]` : ""}`); setTimeout(() => { agentBusy = false; ws.send(JSON.stringify({ type: "desk.agentDone", turnId: m.turnId })); }, 600 + m.text.split(" ").length * 330); }
   if (m.type === "risk.level") console.log(`${ts()}   LEVEL ${m.risk.level}${m.risk.locked ? " LOCKED" : ""}`);
   if (m.type === "error") console.log(`${ts()}   ERROR ${m.message}`);

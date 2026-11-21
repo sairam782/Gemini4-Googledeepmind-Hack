@@ -25,6 +25,9 @@ export interface AgentVoice {
  * wait up to AUTO_WAIT_MS more for one before falling back to a stock card. AUTO_SPEAK_MS=0 turns it off.
  */
 const AUTO_SPEAK_MS = Number(process.env.AUTO_SPEAK_MS ?? 4000);
+/** Backchannels the desk plays ~1 s after the caller stops, while the real reply renders. Pre-rendered there. */
+export const ACKS = ["Mm-hm.", "Okay.", "I see.", "Right."];
+const ACK_ON = process.env.AGENT_ACKS !== "0";
 const CALLER_QUIET_MS = 1000; // the caller must be quiet this long before the agent speaks on its own
 const AUTO_WAIT_MS = 4000; // a generic stock line mid-call sounds off, so wait a bit longer for a tailored one
 
@@ -111,11 +114,33 @@ export class LiveCall {
   caller(text: string) {
     if (this.ended || !text.trim()) return;
     this.brain.addTurn("caller", text.trim().slice(0, 500));
-    if (!this.waitForCallerAudio) this.scheduleAuto();
+    if (!this.waitForCallerAudio) {
+      this.scheduleAuto();
+      this.ack();
+    }
   }
 
   callerAudioDone(turnId: string) {
-    if (this.waitForCallerAudio && turnId === this.brain.lastCallerTurnId()) this.scheduleAuto();
+    if (this.waitForCallerAudio && turnId === this.brain.lastCallerTurnId()) {
+      this.scheduleAuto();
+      this.ack();
+    }
+  }
+
+  private lastAck = "";
+  private ackTurns = 0;
+  /** "Mm-hm." once the caller is quiet, so the line never goes dead while the reply loads. Most turns, not all. */
+  private ack(tries = 0) {
+    if (!ACK_ON || !this.autoSpeakMs || this.ended || this.floor !== "agent" || !this.introduced || this.introPending || this.speaking) return;
+    if (tries === 0 && ++this.ackTurns % 4 === 0) return; // skip every 4th so it doesn't sound mechanical
+    // Only into real silence: never during a hesitation or while a sentence is still being joined.
+    if (this.callerPending() || Date.now() - this.lastCallerSound < 800) {
+      if (tries < 10) setTimeout(() => this.ack(tries + 1), 150);
+      return;
+    }
+    const text = ACKS.filter((a) => a !== this.lastAck)[Math.floor(Math.random() * (ACKS.length - 1))];
+    this.lastAck = text;
+    this.emit({ type: "agent.ack", text });
   }
 
   /** Alex speaking. From the desk it's refused while the agent has the floor; on a phone, Alex's voice wins. */
