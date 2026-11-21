@@ -6,6 +6,7 @@ import { renderSpeech, ttsEnabled } from "./tts.ts";
 import { DeskSession } from "./desk.ts";
 import { calls, findCall } from "./call.ts";
 import { handleTwilioStream, twiml } from "./twilio.ts";
+import { appAllowed, appTokenSet, bearer } from "./auth.ts";
 import type { DeskClientMsg } from "../../shared/brain.ts";
 
 const PORT = Number(process.env.API_PORT || 8787);
@@ -23,6 +24,7 @@ const http = createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "text/xml" });
       return res.end(twiml(String(host), form.get("From") || "unknown"));
     }
+    if (req.url?.startsWith("/api/calls") && !appAllowed(req, bearer(req))) return json(res, 401, { error: "app token required" });
     const rev = req.method === "GET" && /^\/api\/calls\/([^/]+)\/review$/.exec(req.url ?? "");
     if (rev) {
       const call = findCall(decodeURIComponent(rev[1]));
@@ -55,7 +57,7 @@ http.on("upgrade", (req, socket, head) => {
   else socket.destroy();
 });
 
-wss.on("connection", (ws: WebSocket) => {
+wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   let room: CallRoom | null = null;
   let role: Role | null = null;
   let desk: DeskSession | null = null;
@@ -68,6 +70,10 @@ wss.on("connection", (ws: WebSocket) => {
       return;
     }
     if (desk) return desk.handle(msg as DeskClientMsg);
+    if (msg.type === "join" && msg.role === "app" && !appAllowed(req, msg.token)) {
+      ws.send(JSON.stringify({ type: "error", message: "app token required to join a live call" }));
+      return ws.close(4401, "unauthorized");
+    }
     if (msg.type === "join" && (msg.role === "desk" || msg.role === "app")) {
       desk = new DeskSession(ws, msg.role, msg.callId);
       console.log(`${msg.role} joined${msg.role === "app" ? ` ${msg.callId}` : ""}`);
@@ -94,6 +100,7 @@ wss.on("connection", (ws: WebSocket) => {
   });
 });
 
+if (!appTokenSet()) console.warn("APP_TOKEN not set: only this machine can join live calls. Set it before exposing the server.");
 http.listen(PORT, () => {
   console.log(`ReVoice server on http://localhost:${PORT}  (tts: ${ttsEnabled() ? "on" : "off, no GEMINI_API_KEY"})`);
 });

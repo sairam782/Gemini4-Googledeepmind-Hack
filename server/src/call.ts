@@ -29,6 +29,7 @@ export class LiveCall {
   floor: Floor = "alex";
   revision = 1;
   private speaking: string | null = null;
+  private lastAgentEnd = 0;
   private introduced = false;
   private consumed = new Set<string>();
   private listeners = new Set<Listener>();
@@ -92,10 +93,28 @@ export class LiveCall {
 
   interim(speaker: Speaker, text: string) {
     this.emit({ type: "caption.interim", speaker, text });
+    // Barge-in: the caller talks over the agent. Stop the agent so it doesn't talk across them;
+    // the floor stays with the agent and Alex picks the next line as usual.
+    if (speaker === "caller" && this.speaking && text.split(/\s+/).length >= 3) {
+      const t = this.speaking;
+      this.voice?.cut(t);
+      this.brain.cutTurn(t);
+      this.speaking = null;
+      this.lastAgentEnd = Date.now();
+      this.emit({ type: "agent.cut", turnId: t });
+    }
   }
 
   agentDone(turnId: string) {
-    if (this.speaking === turnId) this.speaking = null;
+    if (this.speaking === turnId) {
+      this.speaking = null;
+      this.lastAgentEnd = Date.now();
+    }
+  }
+
+  /** True while the agent is talking, or just stopped: audio heard on Alex's track then is the agent's echo. */
+  agentAudible(graceMs = 800) {
+    return this.speaking !== null || Date.now() - this.lastAgentEnd < graceMs;
   }
 
   get agentSpeaking() {

@@ -73,7 +73,7 @@ export interface CallReview {
 /** Desk (test harness) or phone app → server. The app joins a live phone call by callId ("latest" = newest). */
 export type DeskClientMsg =
   | { type: "join"; role: "desk"; callId: string }
-  | { type: "join"; role: "app"; callId: string }
+  | { type: "join"; role: "app"; callId: string; token?: string } // token = APP_TOKEN (see server/src/auth.ts)
   | { type: "desk.start"; scenarioId: string }
   | { type: "desk.next" } // play the next scripted caller line
   | { type: "desk.say"; speaker: "caller" | "alex"; text: string } // type a line live

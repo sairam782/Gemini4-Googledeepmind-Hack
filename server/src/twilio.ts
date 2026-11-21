@@ -94,7 +94,7 @@ export function handleTwilioStream(ws: WebSocket) {
         transcribers.push(caller);
         if (s.tracks?.includes("outbound")) {
           // Alex's side. Lines heard while the agent is talking are the agent's own audio: skip them.
-          alex = new Transcriber({ interim: (t) => c.interim("alex", t), final: (t) => !c.agentSpeaking && c.alex(t, "phone"), error: onErr }, "alex");
+          alex = new Transcriber({ interim: (t) => c.interim("alex", t), final: (t) => !c.agentAudible() && c.alex(t, "phone"), error: onErr }, "alex");
           transcribers.push(alex);
         }
         call.state();

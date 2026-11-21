@@ -72,7 +72,7 @@ app.on("message", (raw) => {
   if (m.type === "directions" && m.directions.length) log(`   board: ${m.directions.map((d) => `${d.suggested ? "*" : ""}[${d.source}] ${d.label}`).join(" | ")}`);
   if (m.type === "call.review") review = m.review;
 });
-app.send(JSON.stringify({ type: "join", role: "app", callId: callSid }));
+app.send(JSON.stringify({ type: "join", role: "app", callId: callSid, token: process.env.APP_TOKEN }));
 const tap = (m: Record<string, unknown>) => app.send(JSON.stringify({ ...m, actionId: crypto.randomUUID(), revision }));
 
 async function stream(ulaw: Buffer) {
