@@ -164,6 +164,11 @@ export function DeskPage() {
         break;
       case "directions":
         setDirs(msg.directions);
+        // Render the likeliest auto line now, so it plays the moment the agent picks it.
+        if (refs.current.voiceOn && msg.directions.length) {
+          const best = [...msg.directions].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
+          void player().clip(best.say, AGENT_VOICE).catch(() => {});
+        }
         if (refs.current.voiceOn) msg.directions.forEach((d) => void player().clip(d.say, AGENT_VOICE).catch(() => {})); // pre-render
         break;
       case "directions.withdrawn":

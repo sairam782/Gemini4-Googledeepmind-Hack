@@ -26,6 +26,7 @@ let agentBusy = false;
 let delegated = false;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+let stoppedAt = 0; // when the last line's speech ended, to time the reply
 async function speak(text: string) {
   const { samples, rate } = parseWav(await renderSpeech(text, "Puck"));
   const pcm = pcmBytes(resample(samples, rate, 16000));
@@ -34,6 +35,8 @@ async function speak(text: string) {
     ws.send(pcm.subarray(i, i + chunk));
     await sleep(100);
   }
+  stoppedAt = Date.now();
+  console.log(`${ts()}   (stopped talking)`);
   const silence = Buffer.alloc(chunk);
   for (let i = 0; i < 12; i++) { ws.send(silence); await sleep(100); } // 1.2 s of silence ends the turn
 }
@@ -42,7 +45,7 @@ ws.on("message", (raw) => {
   const m = JSON.parse(String(raw)) as DeskServerMsg;
   if (m.type === "state") revision = m.revision;
   if (m.type === "turn.final") console.log(`${ts()} ${m.turn.speaker.padEnd(6)} ${m.turn.text}`);
-  if (m.type === "agent.say") { agentBusy = true; console.log(`${ts()}   >> agent says${m.auto ? " (auto)" : ""}`); setTimeout(() => { agentBusy = false; ws.send(JSON.stringify({ type: "desk.agentDone", turnId: m.turnId })); }, 600 + m.text.split(" ").length * 330); }
+  if (m.type === "agent.say") { agentBusy = true; console.log(`${ts()}   >> agent says${m.auto ? " (auto)" : ""}${stoppedAt ? `  [${((Date.now() - stoppedAt) / 1000).toFixed(1)} s after you stopped]` : ""}`); setTimeout(() => { agentBusy = false; ws.send(JSON.stringify({ type: "desk.agentDone", turnId: m.turnId })); }, 600 + m.text.split(" ").length * 330); }
   if (m.type === "risk.level") console.log(`${ts()}   LEVEL ${m.risk.level}${m.risk.locked ? " LOCKED" : ""}`);
   if (m.type === "error") console.log(`${ts()}   ERROR ${m.message}`);
   if (m.type === "call.review") { console.log(`${ts()}   REVIEW ${m.review.verdict}: ${m.review.evals.filter((e) => e.pass).length}/${m.review.evals.length} evals`); m.review.evals.filter((e) => !e.pass).forEach((e) => console.log(`      FAIL ${e.name}: ${e.detail}`)); process.exit(0); }

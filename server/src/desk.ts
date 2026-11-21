@@ -98,8 +98,8 @@ export class DeskSession {
     call.brain.addTurn("alex", "Hello?");
     if (mode === "mic") {
       const c = call;
-      // Speech-to-text already adds ~1-2 s after you stop talking, so the agent answers a little sooner here.
-      c.autoSpeakMs = Number(process.env.MIC_AUTO_SPEAK_MS ?? 3000);
+      // Speech-to-text already adds ~1 s after you stop talking, so the agent answers ~1 s after the line lands.
+      c.autoSpeakMs = Number(process.env.MIC_AUTO_SPEAK_MS ?? 1000);
       // Speakers instead of headphones: the agent's own voice can leak into the mic. Drop caller text that
       // mostly repeats what the agent just said while it is (or was just) audible.
       // Keep the last few agent lines: a delayed transcript of the intro can arrive after the next line started.
