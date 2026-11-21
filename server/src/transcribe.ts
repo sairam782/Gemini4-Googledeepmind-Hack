@@ -27,7 +27,13 @@ export class Transcriber {
   constructor(private on: TranscriberEvents, readonly label = "caller") {}
 
   private connect() {
-    if (!ai) throw new Error("GEMINI_API_KEY is not set");
+    if (!ai) {
+      // Report once and drop audio; never throw into the socket handler.
+      if (!this.closed) this.on.error?.(`${this.label} transcriber: GEMINI_API_KEY is not set`);
+      this.closed = true;
+      this.queue = [];
+      return;
+    }
     this.openedAt = Date.now();
     this.connecting = ai.live
       .connect({

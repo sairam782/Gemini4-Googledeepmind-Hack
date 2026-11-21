@@ -92,6 +92,10 @@ export class CallBrain {
     };
   }
 
+  lastCallerTurnId() {
+    return this.lastCallerTurn()?.turnId ?? null;
+  }
+
   private lastCallerTurn() {
     return [...this.turns].reverse().find((t) => t.speaker === "caller") ?? null;
   }
@@ -234,6 +238,23 @@ export class CallBrain {
 
   // ---------------------------------------------------------------- supervisor (Neon)
 
+  /**
+   * After hang-up, before the review: a caller who hangs up right after the decisive line would otherwise
+   * leave its signs provisional (Neon runs 6-8 s behind). One last Neon pass over the whole call settles them.
+   */
+  async finalize(timeoutMs = 15000) {
+    this.ended = true;
+    if (![...this.signs.values()].some((s) => s.status === "provisional")) return;
+    this.finishing = true;
+    try {
+      await Promise.race([this.runSupervisor(), new Promise((r) => setTimeout(r, timeoutMs))]);
+    } finally {
+      this.finishing = false;
+    }
+  }
+
+  private finishing = false;
+
   private async runSupervisor() {
     const turns = [...this.turns];
     const forTurn = this.lastCallerTurn();
@@ -245,7 +266,7 @@ export class CallBrain {
       provisional: [...this.signs.values()].filter((s) => s.status === "provisional").map((s) => ({ id: s.id, evidenceTurnId: s.evidenceTurnId })),
       onScreen: this.directions.map((d) => ({ id: d.id, label: d.label, say: d.say })),
     });
-    if (this.ended) return;
+    if (this.ended && !this.finishing) return;
     const out = r.out;
     this.emit({
       type: "lane.result", lane: "supervisor", model: r.model, turnId: forTurn.turnId, ms: r.ms, ok: !!out,
@@ -263,6 +284,7 @@ export class CallBrain {
       }
     }
     this.rescore();
+    if (this.ended) return; // final pass: signs only, no board changes
 
     for (const w of out.withdraw) {
       const d = this.directions.find((x) => x.id === w.directionId);
@@ -295,7 +317,7 @@ export class CallBrain {
     const list = pick.filter((p) => !seen.has(p.key) && seen.add(p.key)).slice(0, 3);
     const dirs: Direction[] = list.map((p, i) => {
       const s = STOCK.find((x) => x.key === p.key)!;
-      return { id: this.nextId(), category: s.category, label: s.label, say: s.say, why: p.why, whyTurnId: p.whyTurnId, suggested: i === 0, source: "stock", revision: this.revision() };
+      return { id: this.nextId(), category: s.category, label: s.label, say: s.say, why: p.why, whyTurnId: p.whyTurnId, suggested: i === 0, confidence: STOCK_CONFIDENCE(p.key, i), source: "stock", revision: this.revision() };
     });
 
     // "Ask what they need" is answered as soon as a money request shows up.
@@ -343,6 +365,26 @@ export class CallBrain {
     this.emit({ type: "directions", directions: this.directions, revision: this.revision() });
   }
 
+  /**
+   * The line the agent says on its own when Alex doesn't tap in time: the highest-confidence card for the
+   * newest caller turn, preferring a fresher held upgrade, and tailored cards over stock on a tie.
+   */
+  bestDirection(): Direction | null {
+    const last = this.lastCallerTurn()?.turnId;
+    if (this.held && this.held.forTurn === last && this.held.dirs.length) {
+      this.directions = this.held.dirs.filter((d) => !this.answered.has(d.category)).map((d) => ({ ...d, revision: this.revision() }));
+      this.directionsFor = this.held.forTurn;
+      this.held = null;
+    }
+    const score = (d: Direction) => d.confidence + (d.source === "stock" ? 0 : 0.05) + (d.suggested ? 0.02 : 0);
+    return [...this.directions].sort((a, b) => score(b) - score(a))[0] ?? null;
+  }
+
+  /** True once a tailored (model-written) board is up for the newest caller turn. */
+  hasTailoredBoard() {
+    return this.directionsFor === this.lastCallerTurn()?.turnId && this.directions.some((d) => d.source !== "stock");
+  }
+
   findDirection(id: string) {
     return this.directions.find((d) => d.id === id) ?? null;
   }
@@ -358,4 +400,10 @@ export class CallBrain {
   private nextId() {
     return `d${++this.seq}`;
   }
+}
+
+/** Stock cards are generic, so they lose to any confident tailored line; a lock-time decline is the exception. */
+function STOCK_CONFIDENCE(key: string, rank: number) {
+  if (key === "decline") return 0.75;
+  return Math.max(0.3, 0.5 - rank * 0.08);
 }

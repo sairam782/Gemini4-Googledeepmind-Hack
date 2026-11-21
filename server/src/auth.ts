@@ -22,7 +22,7 @@ function same(given: string, expected: string) {
 }
 
 export function appAllowed(req: IncomingMessage, token: string | null | undefined) {
-  return TOKEN ? same(token ?? "", TOKEN) : isLoopback(req);
+  return TOKEN ? typeof token === "string" && same(token, TOKEN) : isLoopback(req);
 }
 
 export function bearer(req: IncomingMessage) {

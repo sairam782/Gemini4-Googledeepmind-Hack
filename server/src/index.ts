@@ -90,7 +90,10 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     } catch {
       return;
     }
-    if (desk) return desk.handle(msg as DeskClientMsg);
+    // Valid JSON of the wrong shape (null, a number, missing fields) must never reach a handler that throws.
+    if (!msg || typeof msg !== "object" || typeof (msg as { type?: unknown }).type !== "string") return;
+    try {
+      if (desk) return desk.handle(msg as DeskClientMsg);
     if (msg.type === "join" && msg.role === "app" && !appAllowed(req, msg.token)) {
       ws.send(JSON.stringify({ type: "error", message: "app token required to join a live call" }));
       return ws.close(4401, "unauthorized");
@@ -110,6 +113,9 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
       return;
     }
     if (room && role) room.handle(role, msg as ClientMsg);
+    } catch (e) {
+      console.warn(`ws message rejected: ${(e as Error).message}`);
+    }
   });
 
   ws.on("close", () => {

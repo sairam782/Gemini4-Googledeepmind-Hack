@@ -36,8 +36,8 @@ Notes: ${JSON.stringify(input.notes)}
 
 Write for Alex, plainly:
 - "summary": 2-3 sentences: who called, what they wanted, what happened.
-- "verdict": "scam", "legit" or "unclear".
-- "followUps": up to 3 concrete next steps Alex might take, each with a short why (e.g. call the person back on the saved number, tell the bank, block the number, pick up the prescription). Never suggest paying or sharing a code.
+- "verdict": "scam", "legit" or "unclear". A caller who asks Alex for nothing sensitive (no money, codes, PIN or personal details) and points to official channels (the bank's app, the number on the card, the office's website) is "legit", even if automated or not in contacts. Use "unclear" only when the call really could go either way.
+- "followUps": up to 3 concrete next steps Alex might take, each with a short why (e.g. call the person back on the saved number, tell the bank, block the number, pick up the prescription). Never suggest paying or sharing a code. Suggest blocking the number only for a scam.
 Return JSON only: {"summary":"","verdict":"","followUps":[{"action":"","why":""}]}`;
 
   const r = await generateJson<{ summary?: string; verdict?: string; followUps?: { action?: string; why?: string }[] }>(MODELS.review, prompt, {
@@ -80,13 +80,15 @@ Return JSON only: {"summary":"","verdict":"","followUps":[{"action":"","why":""}
   const shown = (l: ReviewInput["lanes"][number]) =>
     l.ok && ((l.lane === "flash" && !/not shown|^0 /.test(l.note ?? "")) || (l.lane === "planner" && !/stale|^0 /.test(l.note ?? "")));
   const covered = new Set(input.lanes.filter(shown).map((l) => l.turnId));
-  const callerTurns = [...callerIds];
+  // A caller line that ends the call (goodbye, hang-up) needs no reply, so it isn't counted.
+  const lastTurn = input.turns.at(-1);
+  const callerTurns = [...callerIds].filter((id) => !(lastTurn?.speaker === "caller" && id === lastTurn.turnId && id !== input.turns.find((t) => t.speaker === "caller")?.turnId));
   const stale = input.lanes.filter((l) => l.lane === "planner" && /stale/.test(l.note ?? "")).length;
   const plannerRuns = input.lanes.filter((l) => l.lane === "planner").length;
   evals.push({
     name: "Tailored directions for each caller line",
-    pass: callerTurns.length === 0 || covered.size / callerTurns.length >= 0.7,
-    detail: `${covered.size}/${callerTurns.length} lines (Argon late on ${stale}/${plannerRuns}, Flash-Lite covers)`,
+    pass: callerTurns.length === 0 || callerTurns.filter((id) => covered.has(id)).length / callerTurns.length >= 0.7,
+    detail: `${callerTurns.filter((id) => covered.has(id)).length}/${callerTurns.length} lines (Argon late on ${stale}/${plannerRuns}, Flash-Lite covers)`,
   });
 
   const latency: CallReview["latency"] = {};

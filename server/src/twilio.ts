@@ -48,6 +48,7 @@ export function handleTwilioStream(ws: WebSocket) {
           if (call?.agentSpeaking !== turnId) return; // taken back while rendering
           const { samples, rate } = parseWav(wav);
           const ulaw = encodeMulaw(resample(samples, rate, 8000));
+          call.agentPlaying(turnId);
           for (let i = 0; i < ulaw.length; i += FRAME) {
             sendTwilio({ event: "media", streamSid, media: { payload: ulaw.subarray(i, i + FRAME).toString("base64") } });
           }
@@ -79,9 +80,19 @@ export function handleTwilioStream(ws: WebSocket) {
     } catch {
       return;
     }
+    try {
+      onMessage(m);
+    } catch (e) {
+      console.warn(`[twilio] message rejected: ${(e as Error).message}`);
+    }
+  });
+
+  const onMessage = (m: TwilioMsg) => {
+    if (!m || typeof m !== "object") return;
     switch (m.event) {
       case "start": {
-        const s = m.start!;
+        const s = m.start;
+        if (!s || typeof s.streamSid !== "string" || typeof s.callSid !== "string" || call) return;
         streamSid = s.streamSid;
         const p = s.customParameters ?? {};
         const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -108,14 +119,16 @@ export function handleTwilioStream(ws: WebSocket) {
         return;
       }
       case "media":
-        return feed(m.media?.track === "outbound" ? alex : caller, m.media!.payload);
+        if (typeof m.media?.payload !== "string") return;
+        return feed(m.media.track === "outbound" ? alex : caller, m.media.payload);
       case "mark":
-        return call?.agentDone(m.mark!.name);
+        if (typeof m.mark?.name === "string") call?.agentDone(m.mark.name);
+        return;
       case "stop":
         call?.end("caller hung up");
         return;
     }
-  });
+  };
 
   ws.on("close", () => {
     transcribers.forEach((t) => t.close());
