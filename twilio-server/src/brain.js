@@ -69,6 +69,7 @@ export function createBrain(emit, log = console) {
   let fastBusy = false;
   let fastAgain = false;
   let verdictSent = false; // a confident verdict during the call
+  let verdictBusy = false;
   let finalDone = false;
 
   const flag = (id, turn) => {
@@ -117,11 +118,15 @@ Sign ids from the list only; empty list if none.`,
         void fastLane();
       }
     }
-    // Once the caller has said enough, ask for a verdict.
-    if (!verdictSent && callerLines >= 3) void verdict(false);
+    // Ask for a verdict early: as soon as money, gift cards or codes come up, or after 2 caller lines.
+    // It re-runs on every new caller line until Neon is sure.
+    const urgent = ['money', 'third_party_pay', 'code'].some((id) => flagged.has(id));
+    if (!verdictSent && (urgent || callerLines >= 2)) void verdict(false);
   }
 
   async function verdict(final) {
+    if (!final && verdictBusy) return;
+    verdictBusy = true;
     try {
       const r = await json(
         CHECK(),
@@ -131,7 +136,7 @@ Warning signs already seen: ${[...flagged].map((id) => SIGNS[id]).join('; ') || 
 Call transcript:
 ${transcriptText(turns)}
 
-${final ? 'The call has ended. Give your best verdict.' : 'Only set "clear" to true if the story is clear enough to decide.'}
+${final ? 'The call has ended. Give your best verdict.' : 'Set "clear" to true as soon as the evidence is strong. A caller who asks for money, gift cards, crypto, wire transfers or codes while pushing urgency, secrecy, or an unverifiable identity is a scam: decide now, don\'t wait for more.'}
 Return JSON: {"verdict": "scam" | "real" | "unsure", "reasons": ["<short reason>", ...up to 3], "clear": true | false}`,
       );
       const v = ['scam', 'real', 'unsure'].includes(r.verdict) ? r.verdict : 'unsure';
@@ -143,6 +148,8 @@ Return JSON: {"verdict": "scam" | "real" | "unsure", "reasons": ["<short reason>
     } catch (e) {
       log.warn(`[brain] verdict failed: ${e.message}`);
       if (final) emit({ type: 'verdict', verdict: 'unsure', reasons: ['The verdict check failed; review the transcript.'] });
+    } finally {
+      verdictBusy = false;
     }
   }
 

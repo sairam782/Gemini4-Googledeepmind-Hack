@@ -72,4 +72,4 @@ export const Radius = {
 } as const;
 
 /** Native tabs float over the content: leave room so the last item isn't hidden. */
-export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
+export const BottomTabInset = Platform.select({ ios: 96, android: 84 }) ?? 0;

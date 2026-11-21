@@ -129,7 +129,8 @@ export function startAgent(cb) {
       const note = exact
         ? `[Private note from ${OWNER()}: say exactly this to the caller now, nothing else: "${text}"]`
         : `[Private note from ${OWNER()}: ${text}]`;
-      session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: note }] }], turnComplete: true });
+      // Mid-call input goes through the realtime channel (made for live updates; clientContent is for setup).
+      session.sendRealtimeInput({ text: note });
     },
     close() {
       closed = true;

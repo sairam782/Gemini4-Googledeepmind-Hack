@@ -127,7 +127,9 @@ const server = createServer(async (req, res) => {
       }
 
       if (m[2] === 'end') {
-        await tel.endCall(call.callId);
+        // Hang up at the phone company; if it refuses (or it's a test call), still drop our side of the line.
+        await tel.endCall(call.callId).catch((e) => console.warn(`[call ${call.callId}] end via SignalWire failed: ${e.message}`));
+        call.hangUp?.();
         await endCall(call, 'ended from the app');
         return json(res, 200, { ok: true });
       }
@@ -199,6 +201,7 @@ mediaWss.on('connection', (ws) => {
       const callId = m.params.callId || m.callSid || streamSid;
       call = startCall(callId, m.params.from || '', m.params.userPhone || ownerPhone());
       call.clear = () => toLine(tel.clearMessage(streamSid));
+      call.hangUp = () => ws.close();
       const c = call;
       console.log(`[media] stream ${streamSid} for call ${callId} (${m.encoding} ${m.rate} Hz)`);
 
