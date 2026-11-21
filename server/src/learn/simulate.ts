@@ -30,10 +30,12 @@ ${transcript || "(the call just connected)"}
 Reply to what the assistant just said, like a real person on the phone: one or two short sentences, natural and specific.
 If you'd hang up now, set "hangUp": true (and "say" is your last words, or "").
 Return JSON only: {"say":"","hangUp":false}`;
+  // The first line is fixed per persona, so calls in an eval suite start the same way.
+  if (p.opener && !call.brain.turns.some((t) => t.speaker === "caller")) return { say: p.opener, hangUp: false };
   const errors: string[] = [];
   for (const [model, tries] of [[SIM_CALLER_MODEL, 2], [SIM_CALLER_FALLBACK, 1]] as const) {
     for (let i = 0; i < tries; i++) {
-      const r = await generateJson<{ say?: unknown; hangUp?: unknown }>(model, prompt, { timeoutMs: 30000, thinking: thinkingFor("SIM_CALLER_THINKING", "low") });
+      const r = await generateJson<{ say?: unknown; hangUp?: unknown }>(model, prompt, { timeoutMs: 30000, thinking: thinkingFor("SIM_CALLER_THINKING", "low"), temperature: Number(process.env.SIM_CALLER_TEMPERATURE ?? 0) });
       const say = String(r.data?.say ?? "").trim().slice(0, 300);
       if (r.ok && (say || r.data?.hangUp === true)) return { say, hangUp: r.data?.hangUp === true };
       errors.push(`${model}: ${r.ok ? `empty reply ${JSON.stringify(r.data).slice(0, 80)}` : r.error}`);

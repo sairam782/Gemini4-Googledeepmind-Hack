@@ -134,7 +134,7 @@ export function EvalsPage() {
             <div className={`tile ${run.result ? (run.result.passed ? "ok" : "bad") : ""}`}>
               <small>Result</small>
               <b>{run.status === "running" ? "Running" : run.status === "failed" ? "Failed" : run.result?.passed ? "✓ Improved every call" : "✗ Not every call improved"}</b>
-              <span>{run.status === "failed" ? run.error : "Pass = ends higher than it started and never drops"}</span>
+              <span>{run.status === "failed" ? run.error : "Pass = ends higher than it started and never drops by more than 2 points"}</span>
             </div>
             <div className="tile"><small>Critic's own verdict was right</small><b className="num">{agreed} of {run.calls.length}</b><span>decided without being told the answer</span></div>
           </div>

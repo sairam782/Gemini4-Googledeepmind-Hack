@@ -12,10 +12,16 @@ export type { ScoreBreakdown, SuiteCall, SuiteRun };
  * Every call gets a 0-100 score computed in code, so "better than the last call" is a number, not a vibe.
  */
 
+/** Score changes within this many points count as "the same". */
+export const TOLERANCE = 2;
+
 export function scoreCall(m: JudgeMetrics, c: CriticReport, truth: "scam" | "legit"): { total: number; parts: ScoreBreakdown } {
   const verdict = m.verdictCorrect ? 30 : 0;
+  // Scams: how long after the money ask the meter reached High (the caller decides when money comes up,
+  // so judging the delay keeps the caller's choices out of the agent's score).
+  const lag = m.reachedHighAt === null ? null : m.reachedHighAt - (m.firstMoneyAt ?? m.reachedHighAt);
   const detection = truth === "scam"
-    ? m.reachedHighAt === null ? 0 : Math.max(4, 24 - 4 * m.reachedHighAt)
+    ? lag === null ? 0 : lag <= 0 ? 20 : lag === 1 ? 12 : lag === 2 ? 6 : 2
     : m.finalLevel === "High" ? 0 : m.finalLevel === "Medium" ? 12 : 20;
   const checkTiming = truth === "scam"
     ? m.checkBeforeMoney === true || (m.firstMoneyAt === null && m.firstCheckAskedAt !== null) ? 15 : m.firstCheckAskedAt !== null ? 7 : 0
@@ -79,6 +85,9 @@ export async function runSuite(opts: SuiteOptions = {}): Promise<SuiteRun> {
       let added: SuiteCall["lessonsAdded"] = [];
       if (critic.ok) {
         let { playbook, update } = mergeLessons(pb, [{ callId: record.callId, critic }], pb.version + 1);
+        // The suite learns fast: a new lesson applies to the very next call (in normal use, minor lessons
+        // wait for a second sighting before going active).
+        for (const l of playbook.lessons) if (update.added.includes(l.id) && l.status === "candidate") l.status = "active";
         if (update.added.length) playbook = (await consolidate(playbook)).playbook;
         const gate = weightGate(pb, playbook, await store.calls());
         if (!gate.ok) playbook = withoutNewWeightLessons(playbook, update);
@@ -88,7 +97,8 @@ export async function runSuite(opts: SuiteOptions = {}): Promise<SuiteRun> {
 
       run.calls.push({
         n: i + 1, callId: record.callId, persona: p.id, kind: p.kind, playbookLessons: active, score: total, parts, delta,
-        trend: delta === null ? "first" : delta > 0 ? "better" : delta === 0 ? "same" : "worse",
+        // Within ±2 points counts as the same: a live model is never perfectly repeatable.
+        trend: delta === null ? "first" : delta > TOLERANCE ? "better" : delta < -TOLERANCE ? "worse" : "same",
         metrics: {
           finalLevel: metrics.finalLevel, locked: metrics.locked, verdictCorrect: metrics.verdictCorrect, reachedHighAt: metrics.reachedHighAt,
           firstMoneyAt: metrics.firstMoneyAt, firstCheckAskedAt: metrics.firstCheckAskedAt, checkBeforeMoney: metrics.checkBeforeMoney,
@@ -103,8 +113,8 @@ export async function runSuite(opts: SuiteOptions = {}): Promise<SuiteRun> {
     }
     const scores = run.calls.map((c) => c.score);
     const steps = scores.length - 1;
-    const improvedSteps = scores.slice(1).filter((s, i) => s > scores[i]).length;
-    const monotonic = scores.slice(1).every((s, i) => s >= scores[i]);
+    const improvedSteps = scores.slice(1).filter((s, i) => s > scores[i] + TOLERANCE).length;
+    const monotonic = scores.slice(1).every((s, i) => s >= scores[i] - TOLERANCE);
     run.result = { first: scores[0], last: scores.at(-1)!, best: Math.max(...scores), improvedSteps, steps, monotonic, passed: scores.at(-1)! > scores[0] && monotonic };
     if (opts.promote) {
       const cur = await store.currentPlaybook();

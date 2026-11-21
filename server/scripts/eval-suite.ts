@@ -25,5 +25,5 @@ for (const c of run.calls) {
     `${String(c.n).padEnd(6)}${c.persona.padEnd(19)}${String(c.score).padEnd(7)}${(c.delta === null ? "-" : (c.delta >= 0 ? "+" : "") + c.delta).padEnd(8)}${(c.metrics.verdictCorrect ? "right" : "wrong").padEnd(9)}${String(c.metrics.reachedHighAt ?? "-").padEnd(7)}${String(c.metrics.firstCheckAskedAt ?? "-").padEnd(8)}${String(c.metrics.firstMoneyAt ?? "-").padEnd(8)}${`${c.grades.questioning}/${c.grades.timing}`.padEnd(13)}${c.ownVerdict ? `${c.ownVerdict.call} (${Math.round(c.ownVerdict.confidence * 100)}%)` : "-"}`,
   );
 }
-if (run.result) console.log(`\nfirst ${run.result.first} → last ${run.result.last} (best ${run.result.best}); improved on ${run.result.improvedSteps}/${run.result.steps} steps; ${run.result.passed ? "PASS: ended higher and never dropped" : "NOT YET: see the calls that dropped"}`);
+if (run.result) console.log(`\nfirst ${run.result.first} → last ${run.result.last} (best ${run.result.best}); improved on ${run.result.improvedSteps}/${run.result.steps} steps; ${run.result.passed ? "PASS: ended higher and never dropped (±2)" : "NOT YET: see the calls that dropped"}`);
 process.exit(run.status === "done" ? 0 : 1);

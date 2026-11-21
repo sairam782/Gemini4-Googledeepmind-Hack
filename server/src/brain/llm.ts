@@ -99,7 +99,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<boolean> {
 export async function generateJson<T>(
   model: string,
   prompt: string,
-  opts: { timeoutMs: number; thinking?: "low" | "high" },
+  opts: { timeoutMs: number; thinking?: "low" | "high"; temperature?: number },
 ): Promise<JsonResult<T>> {
   const t0 = Date.now();
   // Test seam: scripts/test-learn.ts installs a fake model to run the whole learning loop offline.
@@ -124,6 +124,7 @@ export async function generateJson<T>(
           config: {
             responseMimeType: "application/json",
             abortSignal: abort.signal,
+            ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
             ...(opts.thinking
               ? { thinkingConfig: { thinkingLevel: opts.thinking === "low" ? ThinkingLevel.LOW : ThinkingLevel.HIGH } }
               : {}),
