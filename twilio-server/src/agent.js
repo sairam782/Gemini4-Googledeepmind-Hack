@@ -4,7 +4,7 @@
 import { GoogleGenAI, Modality } from '@google/genai';
 
 const MODEL = () => process.env.GEMINI_LIVE_MODEL || 'gemini-3.8-live';
-const OWNER = () => process.env.OWNER_NAME || 'Alex';
+const OWNER = () => process.env.OWNER_NAME || 'Ariana';
 const LANG = () => process.env.LANGUAGE || 'en-US';
 
 let ai = null;
