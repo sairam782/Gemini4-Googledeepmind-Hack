@@ -80,7 +80,7 @@ export type HistoryEntry = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  myPhone: '',
+  myPhone: process.env.EXPO_PUBLIC_MY_PHONE ?? '',
   agentNumber: process.env.EXPO_PUBLIC_AGENT_NUMBER ?? '',
   carrier: 'verizon',
   serverUrl: process.env.EXPO_PUBLIC_SERVER_URL ?? '',

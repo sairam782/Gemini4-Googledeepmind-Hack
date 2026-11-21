@@ -98,7 +98,8 @@ export function useServerConnection() {
       }
       return connectSim(simServerUrl, simToken);
     }
-    if (!serverUrl.trim() || !myPhone.trim()) {
+    // Your number is only needed for Join; the call stream works without it.
+    if (!serverUrl.trim()) {
       connectionStore.set('not-set-up');
       return;
     }
