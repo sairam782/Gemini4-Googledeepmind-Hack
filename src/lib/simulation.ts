@@ -1,21 +1,25 @@
 /**
- * Web simulation: listens to Abhi's agent server (server/) instead of the phone server.
+ * AI simulation: talks to Abhi's agent server (server/) instead of the phone server.
  *
- * Calls are started from the web test desk (https://localhost:5173/desk) or come in through
- * that server's own Twilio bridge. This file turns its events (shared/brain.ts) into the app's
- * events (protocol.ts), so the Live call screen works the same way for both backends.
+ * Two ways a call gets here:
+ *  - The phone starts one itself (phone-sim.ts): Gemini plays the caller, the agent answers.
+ *  - The app watches the server (connectSimulation below) and joins any call started elsewhere,
+ *    e.g. on the web test desk or through the server's own Twilio bridge.
  *
- * That server's events carry no call ID, so the app finds calls through GET /api/health
- * (which lists them, newest last) and joins each new one over /ws. Off the server's own computer,
- * joining needs the server's APP_TOKEN (Setup → App token).
+ * Either way, this file turns the server's events (shared/brain.ts) into the app's events
+ * (protocol.ts), so the Live call screen works the same for every backend.
  */
 import type { ServerEvent, Verdict } from '@/lib/protocol';
 
 type Level = 'Low' | 'Medium' | 'High';
 type SimSign = { id: string; label: string; evidenceTurnId: string; status: 'provisional' | 'confirmed' | 'removed' };
-type SimMsg =
+export type SimMsg =
+  | { type: 'desk.scenarios'; scenarios: { id: string; kind: 'scam' | 'legit' | 'everyday'; from: string; title: string }[] }
+  | { type: 'call.started'; callId: string; scenario: { from: string; title: string } }
   | { type: 'state'; floor: 'alex' | 'agent' | 'ended'; revision: number }
   | { type: 'turn.final'; turn: { turnId: string; n: number; speaker: 'caller' | 'alex' | 'agent'; text: string } }
+  | { type: 'agent.say'; turnId: string; text: string }
+  | { type: 'agent.cut'; turnId: string }
   | { type: 'risk.signal'; sign: SimSign }
   | { type: 'risk.level'; risk: { level: Level; locked: boolean } }
   | { type: 'call.ended'; reason: string }
@@ -24,39 +28,140 @@ type SimMsg =
   | { type: 'action.rejected'; revision: number; reason: string }
   | { type: 'error'; message: string };
 
-const POLL_MS = 2000;
 /** How long to wait for the call review after hang-up before closing the call anyway. */
 const REVIEW_WAIT_MS = 20000;
+const POLL_MS = 2000;
 
-const turnNumber = (turnId: string) => Number(turnId.replace(/\D/g, '')) || 0;
+export const wsUrl = (baseUrl: string) => `${baseUrl.trim().replace(/\/+$/, '').replace(/^http/i, 'ws')}/ws`;
 
-/** Desk calls are named "<scenario>-<time>"; Twilio calls use the CallSid. */
-function callerLabel(callId: string) {
-  const m = /^([a-z0-9_]+)-\d{10,}$/i.exec(callId);
-  return m ? `Simulated call (${m[1]})` : '';
+// ---------------------------------------------------------------------------
+// Event translation for one call
+// ---------------------------------------------------------------------------
+
+export type CallMapper = {
+  readonly callId: string;
+  /** Latest revision from the server; every tap must carry it. */
+  revision: () => number;
+  handle: (m: SimMsg) => void;
+  /** Closes the call on the app side (sends call.ended once). */
+  finish: () => void;
+  done: () => boolean;
+};
+
+export function createCallMapper(callId: string, emit: (e: ServerEvent) => void, onFinish: () => void): CallMapper {
+  let revision = 1;
+  let done = false;
+  let endTimer: ReturnType<typeof setTimeout> | null = null;
+  const signs = new Map<string, SimSign>();
+
+  const finish = () => {
+    if (done) return;
+    done = true;
+    if (endTimer) clearTimeout(endTimer);
+    emit({ type: 'call.ended', callId });
+    onFinish();
+  };
+
+  const handle = (m: SimMsg) => {
+    if (done) return;
+    switch (m.type) {
+      case 'state':
+      case 'action.accepted':
+      case 'action.rejected':
+        revision = m.revision;
+        if (m.type === 'action.rejected') console.warn('Agent server rejected the action:', m.reason);
+        return;
+      case 'turn.final': {
+        const speaker = m.turn.speaker === 'alex' ? 'you' : m.turn.speaker;
+        emit({ type: 'transcript', callId, turn: m.turn.n, speaker, text: m.turn.text });
+        return;
+      }
+      case 'risk.signal': {
+        const prev = signs.get(m.sign.id);
+        signs.set(m.sign.id, m.sign);
+        if (m.sign.status === 'removed') {
+          if (prev) emit({ type: 'signal.removed', callId, label: prev.label });
+        } else {
+          emit({ type: 'signal', callId, label: m.sign.label, turn: Number(m.sign.evidenceTurnId.replace(/\D/g, '')) || 0 });
+        }
+        return;
+      }
+      case 'risk.level': {
+        const reasons = [...signs.values()].filter((s) => s.status !== 'removed').map((s) => s.label);
+        if (m.risk.locked) reasons.unshift('High risk: confirmed');
+        const verdict: Verdict = m.risk.level === 'High' ? 'scam' : 'unsure';
+        emit({ type: 'verdict', callId, verdict, reasons });
+        return;
+      }
+      case 'call.ended':
+        // Wait for the review so the final verdict lands before the call closes.
+        endTimer = setTimeout(finish, REVIEW_WAIT_MS);
+        return;
+      case 'call.review': {
+        const v = m.review.verdict;
+        const verdict: Verdict = v === 'scam' ? 'scam' : v === 'legit' ? 'real' : 'unsure';
+        emit({ type: 'verdict', callId, verdict, reasons: [m.review.summary] });
+        finish();
+        return;
+      }
+      case 'error':
+        console.warn('Agent server:', m.message);
+        return;
+    }
+  };
+
+  return { callId, revision: () => revision, handle, finish, done: () => done };
 }
 
-type Active = { callId: string; ws: WebSocket; revision: number; signs: Map<string, SimSign>; endTimer: ReturnType<typeof setTimeout> | null; done: boolean };
-let active: Active | null = null;
+// ---------------------------------------------------------------------------
+// Controls (Join / End) for whichever simulated call is on screen
+// ---------------------------------------------------------------------------
 
-/** Sends a control message for the current simulated call. */
-function control(type: 'control.takeback' | 'call.end') {
-  if (!active || active.done || active.ws.readyState !== WebSocket.OPEN) {
-    throw new Error('Not connected to the simulated call.');
-  }
-  const msg: Record<string, unknown> = { type, actionId: `app-${Date.now()}`, revision: active.revision };
+type Controller = { mapper: CallMapper; send: (msg: object) => void };
+const controllers = new Map<string, Controller>();
+
+export function registerController(callId: string, c: Controller) {
+  controllers.set(callId, c);
+  return () => {
+    if (controllers.get(callId) === c) controllers.delete(callId);
+  };
+}
+
+/** True when this call comes from the agent server (so Join/End go there). */
+export const isSimCall = (callId: string) => controllers.has(callId);
+
+function control(callId: string, type: 'control.takeback' | 'call.end') {
+  const c = controllers.get(callId);
+  if (!c || c.mapper.done()) throw new Error('Not connected to this call any more.');
+  const msg: Record<string, unknown> = { type, actionId: `app-${Date.now()}`, revision: c.mapper.revision() };
   if (type === 'control.takeback') msg.localSilenceMs = 0;
-  active.ws.send(JSON.stringify(msg));
+  c.send(msg);
 }
 
-/** Join: take the call back from the agent (the user speaks from now on). */
-export const simTakeBack = () => control('control.takeback');
-/** End: hang up the simulated call. */
-export const simEnd = () => control('call.end');
+/** Join: take the call back from the agent. */
+export const simTakeBack = (callId: string) => control(callId, 'control.takeback');
+/** End: hang up. */
+export const simEnd = (callId: string) => control(callId, 'call.end');
+
+// ---------------------------------------------------------------------------
+// Calls this phone started itself; the watcher below must not join them a second time.
+// ---------------------------------------------------------------------------
+
+const ownCalls = new Set<string>();
+let ownStarting = false;
+export const markOwnCall = (callId: string) => ownCalls.add(callId);
+export const setOwnStarting = (v: boolean) => {
+  ownStarting = v;
+};
+
+// ---------------------------------------------------------------------------
+// Watcher: follow calls started elsewhere (web desk, the server's Twilio bridge)
+// ---------------------------------------------------------------------------
 
 /**
- * Polls the agent server and follows its newest call.
- * `emit` receives app events; `onStatus` reports whether the server is reachable.
+ * Polls the agent server and joins its newest call as the phone app.
+ * The server's events carry no call ID, so calls are found through GET /api/health (newest last).
+ * Off the server's own computer, joining needs the server's APP_TOKEN (Setup → App token).
  */
 export function connectSimulation(
   baseUrl: string,
@@ -65,93 +170,37 @@ export function connectSimulation(
   onStatus: (online: boolean) => void,
 ): () => void {
   const base = baseUrl.trim().replace(/\/+$/, '');
-  const wsBase = base.replace(/^http/i, 'ws');
-  const finished = new Set<string>();
+  const seen = new Set<string>();
   let first = true;
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
-
-  const finish = (a: Active) => {
-    if (a.done) return;
-    a.done = true;
-    if (a.endTimer) clearTimeout(a.endTimer);
-    finished.add(a.callId);
-    emit({ type: 'call.ended', callId: a.callId });
-    a.ws.close();
-  };
-
-  const verdictNow = (a: Active, level: Level, locked: boolean) => {
-    const reasons = [...a.signs.values()].filter((s) => s.status !== 'removed').map((s) => s.label);
-    if (locked) reasons.unshift('High risk: confirmed');
-    const verdict: Verdict = level === 'High' ? 'scam' : 'unsure';
-    emit({ type: 'verdict', callId: a.callId, verdict, reasons });
-  };
-
-  const handle = (a: Active, m: SimMsg) => {
-    const callId = a.callId;
-    switch (m.type) {
-      case 'state':
-      case 'action.accepted':
-        a.revision = m.revision;
-        return;
-      case 'turn.final': {
-        const speaker = m.turn.speaker === 'alex' ? 'you' : m.turn.speaker;
-        emit({ type: 'transcript', callId, turn: m.turn.n, speaker, text: m.turn.text });
-        return;
-      }
-      case 'risk.signal': {
-        const prev = a.signs.get(m.sign.id);
-        a.signs.set(m.sign.id, m.sign);
-        if (m.sign.status === 'removed') {
-          if (prev) emit({ type: 'signal.removed', callId, label: prev.label });
-        } else {
-          emit({ type: 'signal', callId, label: m.sign.label, turn: turnNumber(m.sign.evidenceTurnId) });
-        }
-        return;
-      }
-      case 'risk.level':
-        verdictNow(a, m.risk.level, m.risk.locked);
-        return;
-      case 'call.ended':
-        // Wait for the review so the final verdict lands before the call closes.
-        a.endTimer = setTimeout(() => finish(a), REVIEW_WAIT_MS);
-        return;
-      case 'call.review': {
-        const verdict: Verdict = m.review.verdict === 'scam' ? 'scam' : m.review.verdict === 'legit' ? 'real' : 'unsure';
-        emit({ type: 'verdict', callId, verdict, reasons: [m.review.summary] });
-        finish(a);
-        return;
-      }
-      case 'action.rejected':
-        a.revision = m.revision;
-        console.warn('Agent server rejected the action:', m.reason);
-        return;
-      case 'error':
-        console.warn('Agent server:', m.message);
-        return;
-    }
-  };
+  let active: { mapper: CallMapper; ws: WebSocket; unregister: () => void } | null = null;
 
   const join = (callId: string) => {
-    if (active && !active.done) {
-      // A newer call replaces the one we were watching.
-      finish(active);
-    }
-    const a: Active = { callId, ws: new WebSocket(`${wsBase}/ws`), revision: 1, signs: new Map(), endTimer: null, done: false };
+    if (active && !active.mapper.done()) active.mapper.finish();
+    seen.add(callId);
+    const ws = new WebSocket(wsUrl(base));
+    const mapper = createCallMapper(callId, emit, () => ws.close());
+    const unregister = registerController(callId, { mapper, send: (msg) => ws.send(JSON.stringify(msg)) });
+    const a = { mapper, ws, unregister };
     active = a;
     emit({ type: 'call.started', callId, from: callerLabel(callId) });
-    a.ws.onopen = () => a.ws.send(JSON.stringify({ type: 'join', role: 'app', callId, ...(token ? { token } : {}) }));
-    a.ws.onmessage = (msg) => {
-      if (typeof msg.data !== 'string' || a.done) return;
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'join', role: 'app', callId, ...(token ? { token } : {}) }));
+    ws.onmessage = (msg) => {
+      if (typeof msg.data !== 'string') return;
       try {
-        handle(a, JSON.parse(msg.data) as SimMsg);
+        mapper.handle(JSON.parse(msg.data) as SimMsg);
       } catch {
         // ignore malformed frames
       }
     };
-    a.ws.onclose = () => {
+    ws.onclose = () => {
+      unregister();
       // Dropped mid-call: forget it so the next poll joins again (the server replays everything).
-      if (!a.done && active === a) active = null;
+      if (!mapper.done() && active === a) {
+        seen.delete(callId);
+        active = null;
+      }
     };
   };
 
@@ -164,11 +213,11 @@ export function connectSimulation(
       const ids = body.calls ?? [];
       if (first) {
         // Calls from before the app connected are history, except the newest one, which may still be live.
-        ids.slice(0, -1).forEach((id) => finished.add(id));
+        ids.slice(0, -1).forEach((id) => seen.add(id));
         first = false;
       }
       const newest = ids.at(-1);
-      if (newest && !finished.has(newest) && active?.callId !== newest) join(newest);
+      if (newest && !ownStarting && !ownCalls.has(newest) && !seen.has(newest)) join(newest);
     } catch {
       if (!stopped) onStatus(false);
     }
@@ -180,10 +229,15 @@ export function connectSimulation(
     stopped = true;
     if (timer) clearTimeout(timer);
     if (active) {
-      if (active.endTimer) clearTimeout(active.endTimer);
-      active.done = true;
+      active.unregister();
       active.ws.close();
       active = null;
     }
   };
+}
+
+/** Desk calls are named "<scenario>-<time>"; Twilio calls use the CallSid. */
+function callerLabel(callId: string) {
+  const m = /^([a-z0-9_-]+?)-\d{10,}$/i.exec(callId);
+  return m ? `Simulated call (${m[1]})` : '';
 }

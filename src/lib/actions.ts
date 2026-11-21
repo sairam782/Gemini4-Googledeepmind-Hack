@@ -1,7 +1,7 @@
 import { callStore, updateCall } from '@/lib/call';
 import { endDemoCall } from '@/lib/demo';
 import { blockNumber, endCall, joinCall } from '@/lib/server';
-import { simEnd, simTakeBack } from '@/lib/simulation';
+import { isSimCall, simEnd, simTakeBack } from '@/lib/simulation';
 import { addBlocked, markHistoryBlocked, settingsStore } from '@/lib/store';
 
 /** Join: the server has Twilio ring the user's real phone and bridges them to the caller. */
@@ -12,9 +12,9 @@ export async function join() {
     updateCall({ joined: true });
     return;
   }
-  if (settingsStore.get().backend === 'web') {
-    // Web simulation: there's no phone to ring; Join means taking the call back from the agent.
-    simTakeBack();
+  if (isSimCall(call.callId)) {
+    // Simulated call: there's no phone to ring; Join means taking the call over from the agent.
+    simTakeBack(call.callId);
     updateCall({ joined: true });
     return;
   }
@@ -38,8 +38,8 @@ export async function end() {
     endDemoCall(call.callId);
     return;
   }
-  if (settingsStore.get().backend === 'web') {
-    simEnd();
+  if (isSimCall(call.callId)) {
+    simEnd(call.callId);
     return;
   }
   await endCall(call.callId);
@@ -56,9 +56,9 @@ export async function block() {
     if (!call.ended) endDemoCall(call.callId);
     return;
   }
-  if (settingsStore.get().backend === 'web') {
+  if (isSimCall(call.callId)) {
     // The simulation server has no block list; the number is blocked on this phone only.
-    if (!call.ended) simEnd();
+    if (!call.ended) simEnd(call.callId);
     return;
   }
   await blockNumber(settingsStore.get().myPhone, call.from, call.callId);

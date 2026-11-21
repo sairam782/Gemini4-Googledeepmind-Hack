@@ -1,3 +1,4 @@
+import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View, type ScrollViewInstance } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,6 +13,7 @@ import { block, end, join } from '@/lib/actions';
 import { callStore, dismissCall, type LiveCall } from '@/lib/call';
 import { connectionStore, type ConnectionStatus } from '@/lib/connection';
 import { startDemo } from '@/lib/demo';
+import { startPhoneSim, type SimKind } from '@/lib/phone-sim';
 import { formatNumber } from '@/lib/phone';
 import { redactSafeWords } from '@/lib/redact';
 import { safeWordsStore, useStore } from '@/lib/store';
@@ -36,6 +38,29 @@ const CONNECTION_TEXT: Record<ConnectionStatus, { ok: boolean | null; text: stri
 function Idle() {
   const status = useStore(connectionStore);
   const c = CONNECTION_TEXT[status];
+  const [starting, setStarting] = useState<SimKind | null>(null);
+  // Deep link for demos and shortcuts: unorevoice:///?simulate=scam (or real).
+  const { simulate: linked } = useLocalSearchParams<{ simulate?: string }>();
+
+  const simulate = async (kind: SimKind) => {
+    setStarting(kind);
+    try {
+      await startPhoneSim(kind);
+    } catch (e) {
+      Alert.alert('Couldn’t start the call', e instanceof Error ? e.message : String(e));
+    } finally {
+      setStarting(null);
+    }
+  };
+
+  useEffect(() => {
+    if (linked !== 'scam' && linked !== 'real') return;
+    router.setParams({ simulate: undefined });
+    startPhoneSim(linked).catch((e: unknown) =>
+      Alert.alert('Couldn’t start the call', e instanceof Error ? e.message : String(e)),
+    );
+  }, [linked]);
+
   return (
     <ScrollView contentContainerStyle={[styles.idle, { paddingBottom: BottomTabInset + Spacing.lg }]}>
       <BrandHeader />
@@ -47,7 +72,25 @@ function Idle() {
           here live.
         </T>
       </Card>
-      <T kind="label">Try it without a real call</T>
+      <T kind="label">Simulate an incoming call</T>
+      <T kind="muted">
+        The AI agent answers a caller played by Gemini, with voices. Needs the agent server (Setup → AI simulation
+        address).
+      </T>
+      <BigButton
+        title="Incoming scam call"
+        busy={starting === 'scam'}
+        disabled={starting !== null}
+        onPress={() => void simulate('scam')}
+      />
+      <BigButton
+        title="Incoming real call"
+        variant="neutral"
+        busy={starting === 'real'}
+        disabled={starting !== null}
+        onPress={() => void simulate('real')}
+      />
+      <T kind="label">Offline demo (no server)</T>
       <BigButton title="Play scam demo call" variant="neutral" onPress={() => startDemo('scam')} />
       <BigButton title="Play real demo call" variant="neutral" onPress={() => startDemo('real')} />
     </ScrollView>

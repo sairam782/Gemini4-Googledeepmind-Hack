@@ -26,7 +26,7 @@ Each folder installs on its own. The root `package.json` belongs to the phone ap
 | --- | --- |
 | Phone app | Built: Live call, History and Setup screens, demo calls, Android call check, forwarding codes, push handling. |
 | Agent server + brain | Built in `server/`: 56/56 evals pass on the 8 scripted calls (see below). |
-| **Two paths, on purpose** | The **phone app** talks to `twilio-server/` using the [phone app contract](#phone-app-server-contract) (`/app` socket, `/api/...` routes). The **web test desk** talks to `server/` over `/ws` with `shared/brain.ts` events. Both stay; testing goes through the phone app. |
+| **Two paths, on purpose** | The **phone app** talks to `twilio-server/` using the [phone app contract](#phone-app-server-contract) (`/app` socket, `/api/...` routes). The phone app's **AI simulation** and the web test desk talk to `server/` over `/ws` with `shared/brain.ts` events. Both stay; testing goes through the phone app. |
 
 Until `twilio-server/` is running and set in the app's Setup screen, the phone app's demo calls are the only way to see the Live call screen.
 
@@ -229,16 +229,23 @@ The Twilio Account SID and Auth Token stay on the server. Never put them in the 
 
 Push notifications need an EAS project. Run `npx eas-cli@latest init` once, then rebuild.
 
-## Switch: phone calls or web simulation
+## Switch: phone calls or AI simulation
 
 Setup → **Agent server** has a switch:
 
-| Setting | App listens to | Calls come from | Join · End · Block |
-| --- | --- | --- | --- |
-| **Phone calls** (default) | `twilio-server/` at the server address, over `/app` | Real calls forwarded to the Twilio number | Join rings your phone; End and Block go to the server |
-| **Web simulation** | Abhi's `server/` (default `http://localhost:8787`), over `/ws` | Calls started on the web test desk (`https://localhost:5173/desk`) | Join takes the call back from the agent; End hangs up; Block is saved on the phone only |
+| Setting | App listens to | Calls come from |
+| --- | --- | --- |
+| **Phone calls** (default) | `twilio-server/` at the server address, over `/app` | Real calls forwarded to the Twilio number |
+| **AI simulation** | Abhi's `server/` (default `http://localhost:8787`), over `/ws` | Calls started on this phone or on the web test desk |
 
-To test with the simulation: run `npm run dev:agent`, set the switch to **Web simulation**, and start a scenario on the desk. The call shows up on the Live call tab within about 2 seconds. On a real phone or through ngrok, use your computer's network address (or the ngrok address) and fill in **App token** with the server's `APP_TOKEN`; the server only skips the token for its own computer. The adapter is [`src/lib/simulation.ts`](src/lib/simulation.ts); it turns the server's `shared/brain.ts` events into the app's events, so both modes use the same screens.
+### Simulate an incoming call on the phone (no Twilio)
+
+1. Put `GEMINI_API_KEY` in `.env` and run `npm run server`.
+2. On the Live call tab, tap **Incoming scam call** or **Incoming real call** (or open `unorevoice:///?simulate=scam`).
+
+The phone starts a live-caller scenario on the agent server: Gemini plays the caller and reacts to what it hears, and the agent answers right away. The phone shows the "Unknown caller" notification and the Live call screen and plays both voices (Gemini TTS). **Join** takes the call over from the agent, **End** hangs up, **Block** saves the number on the phone. Code: [`src/lib/phone-sim.ts`](src/lib/phone-sim.ts), [`src/lib/voice.ts`](src/lib/voice.ts), [`src/lib/simulation.ts`](src/lib/simulation.ts) (turns the server's `shared/brain.ts` events into the app's events).
+
+With **AI simulation** selected, the app also follows calls started on the web desk. On a real phone or through ngrok, use your computer's network address (or the ngrok address) and fill in **App token** with the server's `APP_TOKEN`; the server only skips the token for its own computer.
 
 To change the default without tapping, set `EXPO_PUBLIC_BACKEND=web` (and optionally `EXPO_PUBLIC_SIM_SERVER_URL`) in `.env.local`. A choice saved in Setup wins.
 

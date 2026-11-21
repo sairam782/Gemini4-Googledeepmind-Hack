@@ -335,7 +335,7 @@ function SafeWords() {
 
 const BACKENDS: { id: Backend; label: string }[] = [
   { id: 'phone', label: 'Phone calls' },
-  { id: 'web', label: 'Web simulation' },
+  { id: 'web', label: 'AI simulation' },
 ];
 
 function ServerSection() {
@@ -351,7 +351,7 @@ function ServerSection() {
   return (
     <Section
       title="Agent server"
-      hint="Phone calls: real calls forwarded to the Twilio number (twilio-server). Web simulation: calls you start on the web test desk (Abhi’s server).">
+      hint="Phone calls: real calls forwarded to the Twilio number (twilio-server). AI simulation: the agent server (Abhi’s) runs calls with a Gemini-played caller, no Twilio needed.">
       <Segmented<Backend>
         options={BACKENDS}
         value={settings.backend}
@@ -392,8 +392,9 @@ function SimServerFields() {
         secureTextEntry
       />
       <T kind="muted">
-        Start a call on the test desk (https://localhost:5173/desk) and it shows up on the Live call tab. On a real
-        phone, use your computer’s network address instead of localhost, and the server’s APP_TOKEN. Join takes the call back from the agent.
+        Tap “Incoming scam call” on the Live call tab to simulate a call on this phone. Calls started on the web test
+        desk show up too. On a real phone, use your computer’s network address instead of localhost, and the
+        server’s APP_TOKEN. Join takes the call over from the agent.
       </T>
     </>
   );
