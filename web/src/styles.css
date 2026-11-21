@@ -135,3 +135,6 @@ pre.events { font-size: 11px; background: #1F1F1F; color: #FFF4E8; border-radius
 .note .was { display: block; font-size: 12px; color: var(--muted); }
 .events { font-size: 11px; max-height: 300px; overflow: auto; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px; white-space: pre-wrap; }
 .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--deep); color: var(--ondeep); padding: 8px 14px; border-radius: 10px; font-size: 13px; z-index: 20; }
+.miclvl { width: 70px; height: 8px; border-radius: 99px; background: var(--cardstrong); overflow: hidden; display: inline-block; }
+.miclvl i { display: block; height: 100%; background: var(--green); transition: width 80ms linear; }
+.turn.caller.upcoming { opacity: .8; font-style: italic; }

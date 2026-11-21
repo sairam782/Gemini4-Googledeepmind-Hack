@@ -82,8 +82,19 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   let room: CallRoom | null = null;
   let role: Role | null = null;
   let desk: DeskSession | null = null;
+  let deskRole: "desk" | "app" | null = null;
 
-  ws.on("message", (raw) => {
+  ws.on("message", (raw, isBinary) => {
+    // Desk mic mode: raw 16 kHz 16-bit PCM from the browser.
+    if (isBinary) {
+      try {
+        const buf = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
+        if (desk && deskRole === "desk") desk.audio(buf); // only the operator desk streams a mic, not the app
+      } catch (e) {
+        console.error("mic audio:", (e as Error).message);
+      }
+      return;
+    }
     let msg: ClientMsg | DeskClientMsg;
     try {
       msg = JSON.parse(String(raw));
@@ -100,6 +111,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     }
     if (msg.type === "join" && (msg.role === "desk" || msg.role === "app")) {
       desk = new DeskSession(ws, msg.role, msg.callId);
+      deskRole = msg.role;
       console.log(`${msg.role} joined${msg.role === "app" ? ` ${msg.callId}` : ""}`);
       return;
     }
