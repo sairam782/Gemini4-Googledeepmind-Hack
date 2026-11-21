@@ -49,3 +49,7 @@ example
 # generated native folders (Continuous Native Generation)
 /ios
 /android
+
+# recorded demo video and frames
+demo-media/
+demo/work/

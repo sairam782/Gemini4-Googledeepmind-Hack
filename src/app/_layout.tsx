@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '@/hooks/use-theme';
 import { useServerConnection } from '@/lib/connection';
+import { runDemoTour } from '@/lib/demo-tour';
 import { useOpenLiveOnNotificationTap } from '@/lib/notifications';
 import { loadedStore, loadPersisted, useStore } from '@/lib/store';
 
@@ -21,6 +22,13 @@ export default function RootLayout() {
   }, []);
   useServerConnection();
   useOpenLiveOnNotificationTap();
+
+  // Pitch-video recording only (EXPO_PUBLIC_DEMO_TOUR=1): play the demo tour once after launch.
+  useEffect(() => {
+    if (!loaded || process.env.EXPO_PUBLIC_DEMO_TOUR !== '1') return;
+    const t = setTimeout(() => void runDemoTour(), 2500);
+    return () => clearTimeout(t);
+  }, [loaded]);
 
   if (!loaded) return null;
 

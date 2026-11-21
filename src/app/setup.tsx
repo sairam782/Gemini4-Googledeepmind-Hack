@@ -37,6 +37,7 @@ import {
 
 export default function SetupScreen() {
   const theme = useTheme();
+  const { myPhone } = useStore(settingsStore);
   return (
     <SafeAreaView edges={['top']} style={[styles.flex, { backgroundColor: theme.background }]}>
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -45,7 +46,7 @@ export default function SetupScreen() {
           contentContainerStyle={[styles.content, { paddingBottom: BottomTabInset + Spacing.xl }]}>
           <T kind="hero">Setup</T>
           <ModeSection />
-          <YourNumber />
+          <YourNumber key={myPhone} />
           <Forwarding />
           {Platform.OS === 'android' ? <AndroidCallCheck /> : <IPhoneSilenceGuide />}
           {FEATURES.safeWords ? <SafeWords /> : null}
@@ -115,7 +116,7 @@ function Forwarding() {
       title="Turn on forwarding"
       hint="Calls you don’t answer go to the agent’s number. You only do this once.">
       <Field
-        label="Agent number (Twilio)"
+        label="Agent number (SignalWire)"
         value={agentDraft}
         onChangeText={setAgentDraft}
         onEndEditing={() => void saveSettings({ ...settingsStore.get(), agentNumber: cleanNumber(agentDraft) })}
