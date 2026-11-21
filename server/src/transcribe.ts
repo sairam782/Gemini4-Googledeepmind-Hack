@@ -57,6 +57,7 @@ export class Transcriber {
         },
       })
       .then((s) => {
+        if (this.closed) return s.close(); // the call ended while connecting
         this.failures = 0;
         this.session = s;
         for (const chunk of this.queue.splice(0)) this.sendNow(chunk);
@@ -90,6 +91,7 @@ export class Transcriber {
 
   close() {
     this.closed = true;
+    this.queue = [];
     this.session?.close();
     this.session = null;
   }

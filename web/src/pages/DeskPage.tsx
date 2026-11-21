@@ -3,6 +3,7 @@ import type {
   CallReview, DeskClientMsg, DeskServerMsg, Direction, Floor, Lane, RiskLevel, ScenarioInfo, Sign, Turn,
 } from "../../../shared/brain.ts";
 import type { CriticReport, JudgeMetrics, Label } from "../../../shared/learn.ts";
+import { startMic } from "../lib/micStream.ts";
 import { VoicePlayer } from "../lib/voice.ts";
 
 const AGENT_VOICE = "Sulafat"; // warmest and calmest in scripts/check-tone.ts
@@ -38,7 +39,20 @@ export function DeskPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [voiceOn, setVoiceOn] = useState(true);
   const [auto, setAuto] = useState(false);
-  const [liveCaller, setLiveCaller] = useState(true);
+  // live: Gemini plays the caller · mic: you are the caller, live · script: fixed lines
+  const [mode, setMode] = useState<"live" | "mic" | "script">("live");
+  const liveCaller = mode !== "script";
+  const [interim, setInterim] = useState("");
+  const [micLevel, setMicLevel] = useState(0);
+  const micStop = useRef<(() => void) | null>(null); // mic of the call in progress
+  const micNext = useRef<(() => void) | null>(null); // mic opened for the call being started; handed over on call.started
+  const micGen = useRef(0); // bumped on every start/cleanup so a late getUserMedia can't attach a stale mic
+  const stopMics = () => {
+    micGen.current++;
+    micStop.current?.(); micStop.current = null;
+    micNext.current?.(); micNext.current = null;
+  };
+  const callMode = useRef<"live" | "mic" | "script">("live");
   const [autoAt, setAutoAt] = useState<number | null>(null); // when the agent will speak its best line on its own
   const [now, setNow] = useState(Date.now());
   const [typed, setTyped] = useState("");
@@ -52,8 +66,8 @@ export function DeskPage() {
 
   const sock = useRef<WebSocket | null>(null);
   const voice = useRef<VoicePlayer | null>(null);
-  const refs = useRef({ voiceOn, auto, revision, floor, nextLine, total: 0, tapAt: 0 });
-  refs.current = { ...refs.current, voiceOn, auto, revision, floor, nextLine, total: script.length };
+  const refs = useRef({ voiceOn, auto, revision, floor, nextLine, total: 0, tapAt: 0, speaking: null as string | null });
+  refs.current = { ...refs.current, voiceOn, auto, revision, floor, nextLine, total: script.length, speaking };
 
   const send = (msg: DeskClientMsg) => sock.current?.readyState === WebSocket.OPEN && sock.current.send(JSON.stringify(msg));
   const flash = (t: string) => {
@@ -75,6 +89,10 @@ export function DeskPage() {
       s.onmessage = (e) => onMsg(JSON.parse(e.data));
       s.onclose = () => {
         setWs("closed");
+        // The server ended the call with the socket; stop listening and talking here too.
+        stopMics();
+        voice.current?.stop();
+        setSpeaking(null); setAutoAt(null); setInterim("");
         if (!closed) setTimeout(connect, 1000);
       };
     };
@@ -101,6 +119,8 @@ export function DeskPage() {
         setScript(msg.script);
         setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null); setCritic(null); setPlaybook(null); setTurnRisk({}); lastCaller.current = null;
         setM({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null, takeback: null });
+        setInterim(""); setSpeaking(null); setAutoAt(null);
+        micStop.current?.(); micStop.current = micNext.current; micNext.current = null;
         if (refs.current.voiceOn) msg.script.forEach((l) => void player().clip(l, CALLER_VOICE).catch(() => {}));
         void player().clip("Hi, this is Alex's AI assistant. Alex is listening in.", AGENT_VOICE).catch(() => {});
         break;
@@ -109,8 +129,8 @@ export function DeskPage() {
         break;
       case "turn.final":
         setTurns((t) => [...t, msg.turn]);
-        if (msg.turn.speaker === "caller") lastCaller.current = msg.turn.turnId;
-        if (msg.turn.speaker === "caller") {
+        if (msg.turn.speaker === "caller") { lastCaller.current = msg.turn.turnId; setInterim(""); }
+        if (msg.turn.speaker === "caller" && callMode.current !== "mic") {
           // Tell the server when the caller's line has been heard; the auto-speak clock starts there.
           const done = () => send({ type: "desk.callerDone", turnId: msg.turn.turnId });
           const wait = () => new Promise((r) => setTimeout(r, Math.min(4000, msg.turn.text.length * 55)));
@@ -126,7 +146,11 @@ export function DeskPage() {
         if (msg.auto) flash("No tap in time: ReVoice said its most confident line");
         void speakAgent(msg.turnId, msg.text);
         break;
+      case "caption.interim":
+        if (msg.speaker === "caller") setInterim(msg.text);
+        break;
       case "agent.cut":
+        if (refs.current.speaking === msg.turnId) voice.current?.stop(); // you talked over the agent
         setTurns((t) => t.map((x) => (x.turnId === msg.turnId ? { ...x, status: "cut" } : x)));
         break;
       case "risk.signal":
@@ -177,7 +201,10 @@ export function DeskPage() {
         break;
       case "call.ended":
         player().stop();
-        setDirs([]); setWithdrawn([]); setAutoAt(null);
+        setDirs([]); setWithdrawn([]);
+        micStop.current?.(); // the ended call's mic; a mic opened for a restart waits in micNext
+        micStop.current = null;
+        setInterim(""); setSpeaking(null); setAutoAt(null);
         flash(msg.reason);
         break;
       case "error":
@@ -195,6 +222,7 @@ export function DeskPage() {
         const buf = await player().clip(text, AGENT_VOICE);
         if (refs.current.floor !== "agent" && rev !== refs.current.revision) return; // taken back while rendering
         if (refs.current.tapAt) setM((x) => ({ ...x, tapToAudio: Math.round(performance.now() - refs.current.tapAt) }));
+        send({ type: "desk.agentPlaying", turnId });
         result = await player().play(buf);
       } catch {
         await new Promise((r) => setTimeout(r, Math.min(4000, text.length * 55)));
@@ -208,6 +236,8 @@ export function DeskPage() {
     if (refs.current.auto && refs.current.nextLine < refs.current.total) setTimeout(() => send({ type: "desk.next" }), 900);
   }
 
+  useEffect(() => () => stopMics(), []); // stop the mic when leaving the page
+
   useEffect(() => {
     if (!autoAt) return;
     const t = setInterval(() => setNow(Date.now()), 250);
@@ -215,7 +245,22 @@ export function DeskPage() {
   }, [autoAt]);
 
   // ---- controls
-  const start = () => send({ type: "desk.start", scenarioId, mode: liveCaller ? "live" : "script" });
+  const start = async () => {
+    callMode.current = mode;
+    micNext.current?.(); micNext.current = null;
+    const gen = ++micGen.current;
+    if (mode === "mic") {
+      // Open the mic inside the click, so Chrome lets its audio context run.
+      try {
+        const stop = await startMic((pcm) => sock.current?.readyState === WebSocket.OPEN && sock.current.send(pcm), (l) => setMicLevel(l));
+        if (gen !== micGen.current) return stop(); // restarted, ended or left while the permission prompt was up
+        micNext.current = stop;
+      } catch (e) {
+        return flash(`Mic unavailable: ${(e as Error).message}. Allow the microphone and try again.`);
+      }
+    }
+    send({ type: "desk.start", scenarioId, mode });
+  };
   const next = () => send({ type: "desk.next" });
   const delegate = () => {
     refs.current.tapAt = performance.now();
@@ -282,7 +327,12 @@ export function DeskPage() {
           <select className="select" aria-label="Caller" value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
             {scenarios.map((s) => <option key={s.id} value={s.id}>{s.title.replace(/\s*\([^)]*demo\)/i, "")}{s.kind === "scam" ? " (scam)" : s.kind === "legit" ? " (real)" : " (everyday)"}</option>)}
           </select>
-          <label className="toggle"><input type="checkbox" checked={liveCaller} onChange={(e) => setLiveCaller(e.target.checked)} /> Live caller</label>
+          <select className="select" value={mode} onChange={(e) => setMode(e.target.value as typeof mode)} aria-label="Who plays the caller" style={{ minWidth: 0 }}>
+            <option value="live">Gemini plays the caller</option>
+            <option value="mic">I'm the caller (mic)</option>
+            <option value="script">Fixed script</option>
+          </select>
+          {mode === "mic" && live && callMode.current === "mic" && <span className="miclvl" title="Mic level"><i style={{ width: `${Math.min(100, micLevel * 900)}%` }} /></span>}
           <label className="toggle"><input type="checkbox" checked={voiceOn} onChange={(e) => { setVoiceOn(e.target.checked); if (!e.target.checked) voice.current?.stop(); }} /> Voices</label>
           {!liveCaller && live && <>
             <button className="btn soft" onClick={next} disabled={nextLine >= script.length}>
@@ -354,6 +404,9 @@ export function DeskPage() {
                   </div>
                 );
               })}
+              {interim && live && (
+                <div className="turn caller upcoming"><span className="dot" aria-hidden="true" /><div><div className="who">{scenario?.caller ?? "Caller"} <em>speaking…</em></div><p>{interim}</p></div><span /></div>
+              )}
               {!liveCaller && nextLine < script.length && live && (
                 <div className="turn upcoming"><span className="dot" aria-hidden="true" /><div><div className="who">Next scripted line</div><p>{script[nextLine]}</p></div><span /></div>
               )}

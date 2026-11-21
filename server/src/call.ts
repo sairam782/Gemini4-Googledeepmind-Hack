@@ -187,6 +187,7 @@ export class LiveCall {
       this.speaking = null;
       this.playing = null;
       this.lastAgentEnd = Date.now();
+      this.cancelAuto(); // they're still talking; answer after their line, not over it
       this.emit({ type: "agent.cut", turnId: t });
     }
   }
@@ -259,6 +260,7 @@ export class LiveCall {
 
   private takeBack(cutTurnId?: string) {
     this.cancelAuto();
+    if (this.speaking) this.lastAgentEnd = Date.now(); // keep the echo filter on for the cut-off words
     if (this.speaking && (!cutTurnId || cutTurnId === this.speaking)) {
       this.voice?.cut(this.speaking);
       this.brain.cutTurn(this.speaking);

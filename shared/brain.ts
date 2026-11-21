@@ -87,9 +87,10 @@ export type FollowUpAction =
 export type DeskClientMsg =
   | { type: "join"; role: "desk"; callId: string }
   | { type: "join"; role: "app"; callId: string; token?: string } // token = APP_TOKEN (see server/src/auth.ts)
-  | { type: "desk.start"; scenarioId: string; mode?: "live" | "script" } // live: a Gemini-played caller answers on its own
+  | { type: "desk.start"; scenarioId: string; mode?: "live" | "script" | "mic" } // live: Gemini plays the caller; mic: you are the caller (binary 16 kHz PCM frames on the same socket)
   | { type: "desk.next" } // play the next scripted caller line
   | { type: "desk.say"; speaker: "caller" | "alex"; text: string } // type a line live
+  | { type: "desk.agentPlaying"; turnId: string } // the desk started playing this agent line (barge-in can cut it now)
   | { type: "desk.callerDone"; turnId: string } // the desk finished playing this caller line out loud
   | { type: "desk.agentDone"; turnId: string } // the client finished playing an agent line
   | { type: "control.delegate"; actionId: string; revision: number }
