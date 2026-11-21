@@ -47,6 +47,7 @@ export class LiveCall {
   private playing: string | null = null; // the agent turn whose audio is actually out on the line
   private autoTimer: ReturnType<typeof setTimeout> | null = null;
   autoSpeakMs = AUTO_SPEAK_MS;
+  private autoDeadline = 0;
   /** Desk live mode: caller text arrives before its audio is played, so the auto clock starts at callerAudioDone. */
   waitForCallerAudio = false;
   private lastAgentEnd = 0;
@@ -87,6 +88,10 @@ export class LiveCall {
     if (m.type === "lane.result") this.lanes.push({ lane: m.lane, turnId: m.turnId, ms: m.ms, ok: m.ok, note: m.note });
     if (m.type === "directions" && this.voice?.prerender) this.voice.prerender(m.directions.map((d) => d.say));
     this.listeners.forEach((fn) => fn(m));
+    // The board changed under a running countdown: tell the app which card will be said now.
+    if (m.type === "directions" && this.autoTimer && m.directions.length) {
+      this.emit({ type: "agent.autoPick", directionId: this.brain.bestDirection()?.id ?? null, inMs: Math.max(0, this.autoDeadline - Date.now()), revision: this.revision });
+    }
   }
 
   state() {
@@ -129,6 +134,7 @@ export class LiveCall {
       this.voice?.cut(t);
       this.brain.cutTurn(t);
       this.speaking = null;
+      this.playing = null;
       this.lastAgentEnd = Date.now();
       this.emit({ type: "agent.cut", turnId: t });
     }
@@ -221,6 +227,7 @@ export class LiveCall {
     const forTurn = this.brain.lastCallerTurnId();
     if (!this.autoSpeakMs || this.floor !== "agent" || !forTurn) return;
     const hardStop = Date.now() + this.autoSpeakMs + AUTO_WAIT_MS;
+    this.autoDeadline = Date.now() + this.autoSpeakMs;
     this.emit({ type: "agent.autoPick", directionId: this.brain.bestDirection()?.id ?? null, inMs: this.autoSpeakMs, revision: this.revision });
     this.autoTimer = setTimeout(() => this.fireAuto(forTurn, hardStop), this.autoSpeakMs);
   }
@@ -311,6 +318,8 @@ export class LiveCall {
     if (this.ended) return;
     this.cancelAuto(false);
     if (this.speaking) this.voice?.cut(this.speaking);
+    this.speaking = null;
+    this.playing = null;
     this.floor = "ended";
     this.endedAt = Date.now();
     this.revision++;

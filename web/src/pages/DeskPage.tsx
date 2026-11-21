@@ -96,7 +96,7 @@ export function DeskPage() {
         setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null);
         setM({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null, takeback: null });
         if (refs.current.voiceOn) msg.script.forEach((l) => void player().clip(l, CALLER_VOICE).catch(() => {}));
-        void player().clip("Hi, I'm Alex's AI assistant. Alex is listening. Who's calling, and how can I help?", AGENT_VOICE).catch(() => {});
+        void player().clip("Hi, this is Alex's AI assistant. Alex is listening in.", AGENT_VOICE).catch(() => {});
         break;
       case "state":
         setFloor(msg.floor); setRevision(msg.revision); setNextLine(msg.nextLine);

@@ -9,6 +9,11 @@ import { plan, riskCheck, supervise, takeNotes, type CallContext } from "./lanes
 export class SingleFlight {
   private busy = false;
   private pending = false;
+  private running: Promise<void> | null = null;
+  /** The run in flight, if any (finalize waits for it instead of starting a duplicate). */
+  current() {
+    return this.running;
+  }
   constructor(private job: () => Promise<void>, private alive: () => boolean) {}
   kick() {
     if (this.busy) {
@@ -16,8 +21,9 @@ export class SingleFlight {
       return;
     }
     this.busy = true;
-    void this.job().finally(() => {
+    this.running = this.job().finally(() => {
       this.busy = false;
+      this.running = null;
       if (this.pending && this.alive()) {
         this.pending = false;
         this.kick();
@@ -131,7 +137,7 @@ export class CallBrain {
     // Fast lane, part 2: Flash-Lite drafts tailored directions while Argon thinks.
     void plan(this.plannerInput(snapshot), "flash").then((r) => {
       if (this.ended) return;
-      const fresh = this.lastCallerTurn()?.turnId === turn.turnId && this.plannerFor !== turn.turnId;
+      const fresh = this.lastCallerTurn()?.turnId === turn.turnId && this.plannerFor !== turn.turnId && this.answeredTurnId !== turn.turnId;
       const shown = r.out?.directions.length && fresh
         ? this.offerBoard(r.out.directions.map((d) => ({ ...d, id: this.nextId(), source: "flash" as const, revision: this.revision() })), turn.turnId)
         : "skipped";
@@ -146,7 +152,7 @@ export class CallBrain {
       r.signs.forEach((s) => this.upsertSign(s.id, s.evidenceTurnId, "risk", "provisional"));
       if (this.activeSignIds().length === before) return;
       this.rescore();
-      if (this.directionsFor === turn.turnId && this.directions.every((d) => d.source === "stock")) this.stockDirections(turn);
+      if (this.directionsFor === turn.turnId && this.answeredTurnId !== turn.turnId && this.directions.length && this.directions.every((d) => d.source === "stock")) this.stockDirections(turn);
     });
 
     // Notes, planner and supervisor: one in flight each, reruns collapse.
@@ -170,7 +176,7 @@ export class CallBrain {
     if (status === "confirmed" && cur.status !== "confirmed") {
       Object.assign(cur, { status: "confirmed", confirmedBy: lane, evidenceTurnId: cur.status === "removed" ? turnId : cur.evidenceTurnId });
       this.emit({ type: "risk.signal", sign: cur });
-    } else if (status === "provisional" && cur.status === "removed" && lane !== "rules" && turnId !== cur.evidenceTurnId) {
+    } else if (status === "provisional" && cur.status === "removed" && lane !== "rules" && turnNo(turnId) > turnNo(cur.evidenceTurnId)) {
       // New evidence on a later turn brings back a sign Neon removed.
       Object.assign(cur, { status: "provisional", evidenceTurnId: turnId, source: lane });
       this.emit({ type: "risk.signal", sign: cur });
@@ -196,24 +202,27 @@ export class CallBrain {
     if (!forTurn) return;
     const r = await plan(this.plannerInput(turns), "planner");
     if (this.ended) return;
-    const stale = this.lastCallerTurn()?.turnId !== forTurn.turnId;
+    // Stale if a newer caller line arrived, or the agent already answered this one (no board for a closed turn).
+    const stale = this.lastCallerTurn()?.turnId !== forTurn.turnId || this.answeredTurnId === forTurn.turnId;
     const out = r.out;
+    // "Answered" refers to the cards that were on screen, so apply it before showing the new board.
+    // Only checks are one-shot; asking for details or taking a message can come up again.
+    for (const a of out?.answered ?? []) {
+      if (ONE_SHOT.has(a.category)) this.answered.add(a.category);
+      for (const d of this.directions.filter((x) => x.category === a.category)) this.withdraw(d, "already answered", a.evidenceTurnId);
+    }
     // Even a late result pays off: the strategy steers the next Flash-Lite pass.
     if (out?.strategy) this.strategy = { text: out.strategy, turnId: forTurn.turnId };
     let shown: "shown" | "held" | "skipped" = "skipped";
     if (out && !stale && out.directions.length) {
       this.plannerFor = forTurn.turnId;
-      shown = this.offerBoard(out.directions.map((d) => ({ ...d, id: this.nextId(), source: "planner" as const, revision: this.revision() })), forTurn.turnId);
+      const fresh = out.directions.filter((d) => !this.answered.has(d.category));
+      if (fresh.length) shown = this.offerBoard(fresh.map((d) => ({ ...d, id: this.nextId(), source: "planner" as const, revision: this.revision() })), forTurn.turnId);
     }
     this.emit({
       type: "lane.result", lane: "planner", model: r.model, turnId: forTurn.turnId, ms: r.ms, ok: !!out,
       note: out ? `${out.directions.length} directions${stale ? " (stale: newer turn arrived, not shown)" : shown === "held" ? " (held while the agent has the floor)" : ""}${out.strategy ? `; strategy: ${out.strategy}` : ""}${out.dropped.length ? `; guard dropped ${out.dropped.join("; ")}` : ""}` : r.error,
     });
-    if (!out) return;
-    for (const a of out.answered) {
-      this.answered.add(a.category);
-      for (const d of this.directions.filter((x) => x.category === a.category)) this.withdraw(d, "already answered", a.evidenceTurnId);
-    }
   }
 
   // ---------------------------------------------------------------- notes (Hydrogen)
@@ -246,14 +255,19 @@ export class CallBrain {
     this.ended = true;
     if (![...this.signs.values()].some((s) => s.status === "provisional")) return;
     this.finishing = true;
+    const deadline = new Promise((r) => setTimeout(r, timeoutMs));
     try {
-      await Promise.race([this.runSupervisor(), new Promise((r) => setTimeout(r, timeoutMs))]);
+      // A Neon run already in flight covers the last line; only start another if signs are still open after it.
+      const inflight = this.supervisor.current();
+      if (inflight) await Promise.race([inflight, deadline]);
+      if ([...this.signs.values()].some((s) => s.status === "provisional")) await Promise.race([this.runSupervisor(), deadline]);
     } finally {
       this.finishing = false;
     }
   }
 
   private finishing = false;
+  private answeredTurnId: string | null = null; // the caller turn the agent already replied to
 
   private async runSupervisor() {
     const turns = [...this.turns];
@@ -295,7 +309,7 @@ export class CallBrain {
 
     // Once locked, the stock board switches to callback / decline right away.
     const last = this.lastCallerTurn();
-    if (this.locked && last && this.directions.every((d) => d.source === "stock")) this.stockDirections(last);
+    if (this.locked && last && this.answeredTurnId !== last.turnId && this.directions.length && this.directions.every((d) => d.source === "stock")) this.stockDirections(last);
   }
 
   // ---------------------------------------------------------------- directions
@@ -307,7 +321,7 @@ export class CallBrain {
     const done = (c: DirectionCategory) => this.asked.includes(c) || this.answered.has(c);
     if (this.locked || this.has("code")) pick.push({ key: "decline", why: "A code or payment was requested", whyTurnId: ev(this.has("code") ? "code" : "money") });
     if (this.has("money") && !done("offer_callback")) pick.push({ key: "callback", why: "Money requested, identity only claimed", whyTurnId: ev("money") });
-    if ((this.has("new_number") || this.has("emergency") || !this.ctx.inContacts) && !done("verify_identity"))
+    if ((this.has("new_number") || this.has("emergency") || this.has("secrecy")) && !done("verify_identity"))
       pick.push({ key: "family", why: this.has("new_number") ? "New number, identity only claimed" : "Caller is not in contacts", whyTurnId: this.has("new_number") ? ev("new_number") : turn.turnId });
     if (this.has("deadline") && !done("slow_down")) pick.push({ key: "slow", why: "Pressure or a deadline", whyTurnId: ev("deadline") });
     if (!this.has("money") && !done("probe_details")) pick.push({ key: "need", why: "Request is still unclear", whyTurnId: turn.turnId });
@@ -376,8 +390,11 @@ export class CallBrain {
       this.directionsFor = this.held.forTurn;
       this.held = null;
     }
-    const score = (d: Direction) => d.confidence + (d.source === "stock" ? 0 : 0.05) + (d.suggested ? 0.02 : 0);
-    return [...this.directions].sort((a, b) => score(b) - score(a))[0] ?? null;
+    const rank = (d: Direction) => [d.confidence, d.source === "stock" ? 0 : 1, d.suggested ? 1 : 0];
+    return [...this.directions].sort((a, b) => {
+      const [x, y] = [rank(a), rank(b)];
+      return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
+    })[0] ?? null;
   }
 
   /** True once a tailored (model-written) board is up for the newest caller turn. */
@@ -392,6 +409,7 @@ export class CallBrain {
   /** A tap was accepted: one question at a time, so the board clears until the caller answers. */
   picked(d: Direction) {
     this.asked.push(d.category);
+    this.answeredTurnId = this.lastCallerTurn()?.turnId ?? null;
     this.held = null;
     this.directions = [];
     this.emit({ type: "directions", directions: [], revision: this.revision() });
@@ -407,3 +425,6 @@ function STOCK_CONFIDENCE(key: string, rank: number) {
   if (key === "decline") return 0.75;
   return Math.max(0.3, 0.5 - rank * 0.08);
 }
+
+const ONE_SHOT = new Set<DirectionCategory>(["verify_identity", "offer_callback"]);
+const turnNo = (id: string) => Number(id.replace(/\D/g, "")) || 0;

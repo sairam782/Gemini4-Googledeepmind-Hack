@@ -188,3 +188,14 @@ describe("scoreRisk", () => {
     assert.equal(removed.provisional, false);
   });
 });
+
+describe("guardSay sensitive asks", () => {
+  it("blocks asking for account digits but allows the card-number callback", () => {
+    assert.ok(guardSay("Alex asked me to check: what's the last four digits of the account?"));
+    assert.ok(guardSay("Can you confirm the account number on file?"));
+    assert.equal(guardSay("Alex will call back using the number on the back of Alex's card."), null);
+    assert.ok(guardSay("Could you read me the code?"));
+    assert.ok(guardSay("What's your PIN?"));
+    assert.equal(guardSay("Alex won't share an account number on this call."), null);
+  });
+});

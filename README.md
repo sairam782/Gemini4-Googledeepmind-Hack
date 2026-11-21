@@ -73,7 +73,7 @@ npx tsx --env-file=../.env scripts/replay.ts live all    # fully automatic: Gemi
 npx tsx --env-file=../.env scripts/sim-twilio.ts maya    # fake Twilio call against the running server
 ```
 
-Latest runs: `replay.ts all` **56/56 evals pass**, `replay.ts live all` **56/56** (the live caller improvises, so live runs can vary).
+Latest runs: `replay.ts all` **55/55** (one review timed out under load), `replay.ts live` **56/56** across all 8 scenarios (the live caller improvises, so live runs can vary).
 
 **Live caller and auto-speak.** The desk defaults to *Live caller*: Gemini 3.5 Flash-Lite (`CALLER_MODEL`, ~0.5 s a reply) plays the scenario's persona from `server/src/scenarios.ts` and answers whatever the agent or Alex says. It sees only the spoken transcript. Once Alex hands over, the agent says its highest-confidence direction on its own if Alex doesn't tap within `AUTO_SPEAK_MS` (default 4000). Flash-Lite cards land at ~1.3 s (p90 ~2.4 s) and their speech is pre-rendered by ~3-4 s, which still leaves Alex 2-3 s to override. If only stock cards are up, it waits up to 2 s more for a tailored one. Every direction carries a `confidence` (0-1). The app gets `agent.autoPick {directionId, inMs}` for a countdown, and `agent.say` carries `auto: true` when nobody tapped.
 - Correct risk level and verdict on all 8 calls.
