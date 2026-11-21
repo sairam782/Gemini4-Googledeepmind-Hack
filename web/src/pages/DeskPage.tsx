@@ -5,7 +5,7 @@ import type {
 import type { CriticReport, JudgeMetrics, Label } from "../../../shared/learn.ts";
 import { VoicePlayer } from "../lib/voice.ts";
 
-const AGENT_VOICE = "Kore";
+const AGENT_VOICE = "Sulafat"; // warmest and calmest in scripts/check-tone.ts
 const LANE_NAMES: Record<Exclude<Lane, "review">, string> = {
   rules: "Rules", flash: "Flash-Lite", risk: "Risk (Hydrogen)", notes: "Notes (Hydrogen)", planner: "Planner (Argon)", supervisor: "Supervisor (Neon)",
 };

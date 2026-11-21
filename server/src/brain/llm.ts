@@ -131,7 +131,9 @@ export async function generateJson<T>(
         });
         const text = res.text ?? "";
         try {
-          const data: unknown = JSON.parse(text);
+          // Abhi's loose parse (unwraps JSON inside extra text), then our guard: lanes read fields off the
+          // result, so null, a bare string or a number is as useless as bad JSON.
+          const data: unknown = parseLoose(text);
           if (data === null || typeof data !== "object") {
             return { ok: false, ms: Date.now() - t0, error: "model response is not a JSON object or array", retries };
           }
@@ -158,5 +160,17 @@ export async function generateJson<T>(
     }
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** JSON.parse, falling back to the outermost {...} or [...] when the model wraps it in extra text. */
+export function parseLoose(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    const start = text.search(/[[{]/);
+    const end = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
+    if (start < 0 || end <= start) throw e;
+    return JSON.parse(text.slice(start, end + 1));
   }
 }

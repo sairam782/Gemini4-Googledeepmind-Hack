@@ -9,16 +9,13 @@ const params = new URLSearchParams(location.search);
 const callId = params.get("call") || "demo";
 const path = location.pathname.replace(/\/+$/, "");
 
-/** Two arcs turning back on themselves: the call, reversed. */
-export function Mark({ size = 28 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
-      <rect width="32" height="32" rx="9" fill="#0e1a2b" />
-      <path d="M9 13a7 7 0 0 1 12.5-4.3M23 19a7 7 0 0 1-12.5 4.3" fill="none" stroke="#fff" strokeWidth="2.6" strokeLinecap="round" />
-      <path d="M22.5 5.5v3.8h-3.8M9.5 26.5v-3.8h3.8" fill="none" stroke="#7f95ff" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+/** The brand mark from the phone app (web/public/brand-icon.svg). */
+export function Mark({ size = 30 }: { size?: number }) {
+  return <img className="logo" src="/brand-icon.svg" width={size} height={size} alt="" />;
 }
+
+/** The wordmark: coral "Uno", ink "Re", green "Voice". */
+export const Word = () => <span className="word" aria-label="Uno ReVoice"><span className="uno">Uno </span>Re<span className="voice">Voice</span></span>;
 
 function Home() {
   const q = `?call=${encodeURIComponent(callId)}`;
@@ -80,7 +77,7 @@ function App() {
     <>
       <header className="appbar">
         <div className="appbar-in">
-          <a className="brand" href="/"><Mark /> ReVoice</a>
+          <a className="brand" href="/"><Mark /> <Word /></a>
           <nav className="nav">
             <a href="/desk" aria-current={here === "desk" ? "page" : undefined}>Call desk</a>
             <a href={`/alex?call=${encodeURIComponent(callId)}`} aria-current={here === "live" ? "page" : undefined}>Live call</a>

@@ -41,7 +41,7 @@ export interface AgentVoice {
  * wait up to AUTO_WAIT_MS more for one before falling back to a stock card. AUTO_SPEAK_MS=0 turns it off.
  */
 const AUTO_SPEAK_MS = Number(process.env.AUTO_SPEAK_MS ?? 4000);
-const AUTO_WAIT_MS = 2000;
+const AUTO_WAIT_MS = 4000; // a generic stock line mid-call sounds off, so wait a bit longer for a tailored one
 
 export const calls = new Map<string, LiveCall>();
 let latest: string | null = null;
