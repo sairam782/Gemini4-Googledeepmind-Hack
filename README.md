@@ -136,6 +136,12 @@ Learning data uses local JSON files under `server/data/learning/` by default. Se
 
 The import copies reviewed calls, every saved playbook, the current version, and JSON eval reports. It runs as one transaction and requires an empty learning database, so it cannot replace existing shared history. The tables live in the private `revoice` schema and the browser talks to the app server.
 
+## Vercel demo
+
+Import the repository at its root and track the `evals-critic` branch. The repository's Vercel configuration builds the desk and serves its WebSocket and HTTP endpoints through one Node.js function. Keep Vercel Authentication enabled for any environment connected to the shared call database.
+
+Add `GEMINI_API_KEY` and `SUPABASE_DB_URL` as server-side environment variables for the deployment. Supabase stores call reviews, learned lessons and eval results across function instances. Run multi-call eval suites from the development server and use the hosted dashboard to view their shared results. A desk call stays on one WebSocket for the life of that connection. Separate Twilio and phone-app connections can land on different functions, so use a persistent Node host for that path.
+
 ## Phone (Twilio)
 
 1. Expose the server, e.g. `ngrok http 8787`, and set `PUBLIC_HOST` to the ngrok host.

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "npm run build",
+  "outputDirectory": "web/dist",
+  "fluid": true,
+  "functions": {
+    "api/revoice.ts": {
+      "maxDuration": 300,
+      "includeFiles": "supabase/prod-ca-2021.crt"
+    }
+  },
+  "routes": [
+    { "src": "^(/(?:api/.*|ws|twilio(?:/.*)?))$", "dest": "/api/revoice?__revoice_route=$1" },
+    { "handle": "filesystem" },
+    { "src": "^/.*$", "dest": "/index.html" }
+  ]
+}

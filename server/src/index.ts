@@ -17,8 +17,21 @@ import { serveWeb } from "./web.ts";
 const PORT = Number(process.env.PORT || process.env.API_PORT || 8787); // PORT: set by hosting platforms
 const rooms = new Map<string, CallRoom>();
 
+const onVercel = process.env.VERCEL === "1";
+
+// Vercel may pass through the original URL or the destination of the internal rewrite.
+function restoreRoute(req: IncomingMessage) {
+  if (!onVercel || !req.url?.startsWith("/api/revoice?")) return;
+  const url = new URL(req.url, "http://localhost");
+  const route = url.searchParams.get("__revoice_route");
+  if (!route || !/^\/(?:api\/|ws$|twilio(?:\/|$))/.test(route)) return;
+  url.searchParams.delete("__revoice_route");
+  req.url = route + url.search;
+}
+
 const http = createServer(async (req, res) => {
   try {
+    restoreRoute(req);
     if (req.method === "GET" && req.url === "/api/health") {
       return json(res, 200, { ok: true, tts: ttsEnabled(), rooms: rooms.size, calls: [...calls.keys()], learning: process.env.SUPABASE_DB_URL ? "supabase" : "files" });
     }
@@ -66,6 +79,7 @@ const http = createServer(async (req, res) => {
       return json(res, 200, all.slice(0, limit));
     }
     if (req.method === "POST" && req.url === "/api/evals/run") {
+      if (onVercel) return json(res, 503, { error: "Run evaluation suites from the development server and view the shared results here." });
       const { calls: n, persona, current } = JSON.parse((await body(req)) || "{}") as { calls?: number; persona?: string; current?: boolean };
       const args = ["--calls", String(Math.max(2, Math.min(10, Number(n) || 5))), "--persona", String(persona || "sister-tow"), ...(current ? ["--current"] : [])];
       const r = startRun("eval-suite.ts", args);
@@ -76,7 +90,7 @@ const http = createServer(async (req, res) => {
       return json(res, 200, PERSONAS.map(({ id, title, kind }) => ({ id, title, kind })));
     }
     // Dev runner (open in hackathon mode): start a test script, read its log. See devrun.ts.
-    if (req.url?.startsWith("/api/dev/") && devRunnerOn()) {
+    if (req.url?.startsWith("/api/dev/") && !onVercel && devRunnerOn()) {
       if (req.method === "POST" && req.url === "/api/dev/run") {
         const { script, args } = JSON.parse(await body(req)) as { script?: string; args?: unknown };
         const r = startRun(String(script ?? ""), args);
@@ -139,6 +153,7 @@ const wss = new WebSocketServer({ noServer: true });
 const twilioWss = new WebSocketServer({ noServer: true });
 twilioWss.on("connection", handleTwilioStream);
 http.on("upgrade", (req, socket, head) => {
+  restoreRoute(req);
   const path = (req.url ?? "").split("?")[0];
   if (path === "/ws") wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   else if (path === "/twilio") twilioWss.handleUpgrade(req, socket, head, (ws) => twilioWss.emit("connection", ws, req));
@@ -206,11 +221,15 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   });
 });
 
-if (!appTokenSet()) console.log("APP_TOKEN not set: anyone can join live calls (open hackathon mode).");
-http.listen(PORT, () => {
-  console.log(`ReVoice server on http://localhost:${PORT}  (tts: ${ttsEnabled() ? "on" : "off, no GEMINI_API_KEY"})`);
-  if (!process.env.TWILIO_AUTH_TOKEN) console.warn("Twilio signature check OFF");
-});
+if (!onVercel) {
+  if (!appTokenSet()) console.log("APP_TOKEN not set: anyone can join live calls (open hackathon mode).");
+  http.listen(PORT, () => {
+    console.log(`ReVoice server on http://localhost:${PORT}  (tts: ${ttsEnabled() ? "on" : "off, no GEMINI_API_KEY"})`);
+    if (!process.env.TWILIO_AUTH_TOKEN) console.warn("Twilio signature check OFF");
+  });
+}
+
+export default http;
 
 function json(res: ServerResponse, status: number, data: unknown) {
   res.writeHead(status, { "content-type": "application/json" });
