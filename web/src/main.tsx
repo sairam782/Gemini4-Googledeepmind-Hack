@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { AlexPage } from "./pages/AlexPage.tsx";
 import { CallerPage } from "./pages/CallerPage.tsx";
+import { DeskPage } from "./pages/DeskPage.tsx";
 import "./styles.css";
 
 const params = new URLSearchParams(location.search);
@@ -18,6 +19,7 @@ function Home() {
         <div className="row">
           <a className="btn primary" href={`/alex${q}`}>I'm Alex (recipient)</a>
           <a className="btn soft" href={`/caller${q}`}>I'm the caller</a>
+          <a className="btn soft" href="/desk">Brain test desk (scripted calls)</a>
         </div>
       </div>
     </div>
@@ -32,7 +34,7 @@ function App() {
         <b>Uno ReVoice</b>
         <span className="badge">Captions consented · nothing stored</span>
       </header>
-      {path === "/alex" ? <AlexPage callId={callId} /> : path === "/caller" ? <CallerPage callId={callId} /> : <Home />}
+      {path === "/desk" ? <DeskPage /> : path === "/alex" ? <AlexPage callId={callId} /> : path === "/caller" ? <CallerPage callId={callId} /> : <Home />}
     </>
   );
 }

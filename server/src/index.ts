@@ -3,6 +3,8 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMsg, Role } from "../../shared/protocol.ts";
 import { CallRoom } from "./room.ts";
 import { renderSpeech, ttsEnabled } from "./tts.ts";
+import { DeskSession } from "./desk.ts";
+import type { DeskClientMsg } from "../../shared/brain.ts";
 
 const PORT = Number(process.env.API_PORT || 8787);
 const rooms = new Map<string, CallRoom>();
@@ -33,12 +35,19 @@ const wss = new WebSocketServer({ server: http, path: "/ws" });
 wss.on("connection", (ws: WebSocket) => {
   let room: CallRoom | null = null;
   let role: Role | null = null;
+  let desk: DeskSession | null = null;
 
   ws.on("message", (raw) => {
-    let msg: ClientMsg;
+    let msg: ClientMsg | DeskClientMsg;
     try {
       msg = JSON.parse(String(raw));
     } catch {
+      return;
+    }
+    if (desk) return desk.handle(msg as DeskClientMsg);
+    if (msg.type === "join" && msg.role === "desk") {
+      desk = new DeskSession(ws);
+      console.log("desk joined");
       return;
     }
     if (msg.type === "join") {
@@ -50,10 +59,11 @@ wss.on("connection", (ws: WebSocket) => {
       console.log(`[${msg.callId}] ${role} joined`);
       return;
     }
-    if (room && role) room.handle(role, msg);
+    if (room && role) room.handle(role, msg as ClientMsg);
   });
 
   ws.on("close", () => {
+    desk?.close();
     if (!room || !role) return;
     room.leave(role, ws);
     console.log(`[${room.callId}] ${role} left`);
