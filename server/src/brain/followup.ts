@@ -201,6 +201,7 @@ function validateCall(
   }
 
   if (name === "block_number") {
+    if (!isSuspicious) return null; // never block a legitimate caller (pharmacy, real bank, family)
     const number = str(args.number) || input.from;
     const d = digitsOnly(number);
     if (d.length < 7) return null;
