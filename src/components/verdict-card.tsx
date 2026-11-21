@@ -17,8 +17,8 @@ export function VerdictCard({ verdict, reasons, ended }: { verdict: Verdict | nu
         <Text style={[styles.label, { color: v.fg }]}>{label}</Text>
       </View>
       {reasons.length > 0 ? (
-        reasons.slice(0, 3).map((r, i) => (
-          <Text key={i} numberOfLines={2} style={[styles.reason, { color: v.fg }]}>
+        reasons.slice(0, 2).map((r, i) => (
+          <Text key={i} numberOfLines={1} style={[styles.reason, { color: v.fg }]}>
             • {r}
           </Text>
         ))
@@ -40,10 +40,10 @@ export function VerdictBadge({ verdict }: { verdict: Verdict | null }) {
 }
 
 const styles = StyleSheet.create({
-  card: { borderRadius: Radius.lg, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm + 4, gap: 2 },
+  card: { borderRadius: Radius.md, paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, gap: 1 },
   row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
-  label: { fontSize: 30, lineHeight: 36, fontWeight: '900', letterSpacing: 1 },
-  reason: { fontSize: 15, lineHeight: 20, fontWeight: '600' },
+  label: { fontSize: 22, lineHeight: 27, fontWeight: '900', letterSpacing: 1 },
+  reason: { fontSize: 14, lineHeight: 19, fontWeight: '600' },
   badge: { borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6, minWidth: 82, alignItems: 'center' },
   badgeText: { fontSize: 15, fontWeight: '900', letterSpacing: 0.5 },
 });
