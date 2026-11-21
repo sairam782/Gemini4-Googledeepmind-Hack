@@ -1,0 +1,15 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Needed to tell contacts (ring normally) apart from unknown callers (sent to the agent). -->
+  <uses-permission android:name="android.permission.READ_CONTACTS" />
+
+  <application>
+    <service
+      android:name="expo.modules.callscreener.UnoCallScreeningService"
+      android:exported="true"
+      android:permission="android.permission.BIND_SCREENING_SERVICE">
+      <intent-filter>
+        <action android:name="android.telecom.CallScreeningService" />
+      </intent-filter>
+    </service>
+  </application>
+</manifest>
