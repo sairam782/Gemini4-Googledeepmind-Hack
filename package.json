@@ -47,7 +47,8 @@
     "lint": "expo lint",
     "server": "npm --prefix server run dev",
     "desk": "npm --prefix web run dev",
-    "dev:agent": "npm --prefix server run dev & npm --prefix web run dev & wait"
+    "dev:agent": "npm --prefix server run dev & npm --prefix web run dev & wait",
+    "test": "npm --prefix server test"
   },
   "private": true
 }

@@ -6,9 +6,9 @@ export const NOTE_FIELDS = [
   "Says they are", "Calling from", "Story", "Request", "Amount", "How to pay",
   "Deadline", "Ready by", "Family question", "Callback", "Location",
 ];
-const CATEGORIES: DirectionCategory[] = ["verify_identity", "offer_callback", "probe_details", "slow_down", "decline"];
+const CATEGORIES: DirectionCategory[] = ["verify_identity", "offer_callback", "probe_details", "slow_down", "decline", "take_message"];
 const NOT_SIGNS =
-  'Not warning signs: ordinary business hours or pickup windows ("by four", "within seven days"), and a caller correcting a price, date or detail they gave.';
+  'Not warning signs: ordinary business hours or pickup windows ("by four", "within seven days"), a caller correcting a price, date or detail they gave, and a real alert telling Alex to check the app or call the number on the card (that is not authority_threat).';
 
 const catalogText = SIGN_IDS.map((id) => `- ${id}: ${SIGNS[id].label}`).join("\n");
 const transcriptText = (turns: Turn[]) =>
@@ -55,44 +55,78 @@ export interface PlannerInput {
   onScreen: Pick<Direction, "category" | "label">[];
   asked: DirectionCategory[];
   answered: DirectionCategory[];
+  strategy?: { text: string; turnId: string } | null; // Argon's private plan, carried to the next turn
 }
 export interface PlannerOutput {
   directions: Omit<Direction, "id" | "source" | "revision">[];
   answered: { category: DirectionCategory; evidenceTurnId: string }[];
+  strategy: string; // planner lane only: one-sentence plan for the next lines
   dropped: string[];
 }
 
 const PLANNER_OPTS = {
-  planner: () => ({ model: MODELS.planner, timeoutMs: 20000, thinking: thinkingFor("PLANNER_THINKING", "low") }),
+  planner: () => ({ model: MODELS.planner, timeoutMs: 15000, thinking: thinkingFor("PLANNER_THINKING", "low") }),
   flash: () => ({ model: MODELS.flash, timeoutMs: 8000, thinking: thinkingFor("FLASH_THINKING", undefined) }),
 };
 
 export async function plan(input: PlannerInput, lane: "planner" | "flash" = "planner") {
   const opts = PLANNER_OPTS[lane]();
-  const prompt = `You write what Alex's AI assistant could say next on a live phone call. Alex reads your options privately and taps one.
+  const newest = [...input.turns].reverse().find((t) => t.speaker === "caller");
+  const prompt = `You script the next spoken line for Alex's AI phone assistant, live, mid-call. The assistant answered Alex's phone and is talking to the caller right now. Alex sees your 3 options and taps one; if Alex doesn't tap within a few seconds, the assistant SAYS your highest-confidence option out loud. So every option must sound natural spoken right now, in reply to what the caller just said.
 
-WHO IS SPEAKING: an AI assistant that answered for Alex. It is NOT Alex and NOT family. It talks TO the caller and refers to Alex in the third person ("Alex", never "I" as Alex, never "our", "my mom", "before I send").
-It never approves, agrees, pays, sends money or shares codes, never says it will end or hang up the call (only Alex does that), and never mentions notes, scores, warnings or scams.
+THE ASSISTANT'S VOICE
+- An AI assistant speaking FOR Alex: "Alex", "Alex's", "I'll let Alex know". Never speaks as Alex or family (no "our", "we used to", "my mom").
+- Warm, calm, brief, like a capable receptionist. Contractions. 6 to 22 words. One question or one statement per line.
+- Never start with a greeting ("Hi", "Hello") or re-introduce the assistant; it already introduced itself.
+- Keep pronouns consistent ("call Maya on the number Alex has saved for her"), and don't say "Alex" twice in one sentence when "the card" or "her" works.
+- You don't know Alex's private facts, so never say an answer "didn't match" or was "wrong"; react to the hesitation or dodge instead ("since you weren't sure").
+- Refuse only what was actually asked: mention codes only if a code was asked for, money only if money was asked for. Name it specifically ("the $900 to Jordan").
+- If the caller already rejected the callback, don't offer it again word for word; move to a clear decline of their exact request.
+- On routine calls keep it casual: a pickup time is not a "deadline".
+- Start by reacting to the caller's newest line (acknowledge, answer a fair question, or name the dodge politely), then make the move.
+- Use the call's specifics: names, amounts, dates, places ("the $900 for the tow", "Friday pickup").
+- Never ask the caller for, or about, account numbers, card digits, PINs, passwords, codes, addresses or other personal details, even "just the last four". The assistant gives nothing and collects nothing sensitive.
+- Callbacks are always on a number Alex already has: "the number Alex has saved for Maya", "the number on the back of Alex's card", "the shop's number". Never "your usual number" or a number the caller offers.
+- Never: approve, agree, pay, promise money, read or ask to hear codes being shared, say it will hang up or end the call, or use the words "scam", "note", "private", "approve", "deal", "warning".
+
+WHAT TO DO (read the whole call, then the caller's newest line ${newest ? `${newest.turnId}: "${newest.text}"` : ""})
+- Real or routine calls (pharmacy, doctor, a known shop, an alert that asks for nothing): be helpful, not suspicious. Confirm the key detail back, ask one useful practical question, or take the message ("take_message": "Got it, Tuesday at 10. I'll pass that to Alex."). Never interrogate them.
+- Everyday decisions (an estimate, a booking): confirm corrected values, ask for it in writing, say Alex will decide or call back. Never say yes for Alex.
+- Real bank alerts ask for nothing and point to the app or the card's number: thank them, confirm the detail, take_message.
+- Unknown caller claiming to be family or a bank, asking for money, codes or secrecy, or threatening a freeze: climb this ladder, one rung per line, never repeating a rung the caller already got:
+  1. verify_identity: ask something only the real person would know, about Alex in the third person ("Alex asked me to check: what's the name of Alex's dog?"). For a bank, agency or company there is no quiz: skip to rung 2.
+  2. offer_callback: Alex will call back on the number Alex already has (for a bank: the number on Alex's card).
+  3. decline: calm, firm no to exactly what they asked for, with the safe path ("Alex won't send the $900 to Jordan on this call. Alex will reach Maya on the number Alex has saved.").
+  Dodged, wrong or angry answer to a rung = move UP a rung and say so kindly ("I hear you're in a hurry, but..."). A code request at any point = decline now.
+- slow_down when the caller pushes a deadline; probe_details when the request is still unclear.
+
+FORMAT OF THE 3 OPTIONS
+- Option 1: the best next line ("suggested": true). Option 2: a good alternative. Option 3: a safe fallback (for risky calls, the firmest safe line).
+- "confidence" 0.0 to 1.0: how sure you are this exact line is right to say NOW. Be calibrated: the best line on a clear call 0.85+, a decent alternative 0.5-0.7, a line that doesn't fit the newest turn below 0.4.
+- "why": a few words for Alex. "whyTurnId": the turn it reacts to.
+- "answered": categories already on screen that the caller has now answered, with the turn id.
+
+GOOD vs BAD (caller: "Why are you asking me that? There's no time, please!")
+- GOOD offer_callback: "I understand it's urgent. Since you weren't sure, Alex will call Maya on the number Alex has saved for her."
+- BAD: "Can you tell me something only you and Alex would know?" (repeats a rung the caller just dodged)
+GOOD vs BAD (pharmacy: "We'll hold it for seven days, no payment needed.")
+- GOOD take_message: "Perfect, seven days, no payment. I'll let Alex know it's ready. Thanks for calling!"
+- BAD verify_identity: "Can you prove who you are?" (interrogates a routine call)
 
 ${callLine(input.ctx)}
 Transcript:
 ${transcriptText(input.turns)}
 
 Warning signs so far: ${input.signs.join(", ") || "none"}
-Notes: ${JSON.stringify(input.notes)}
+Facts from the caller: ${JSON.stringify(input.notes)}
 On Alex's screen now: ${JSON.stringify(input.onScreen)}
-Categories already asked: ${JSON.stringify(input.asked)}. Already answered: ${JSON.stringify(input.answered)}.
-
-Always write exactly 3 options, even if the screen already has good ones (refresh them for the newest line). Categories: ${CATEGORIES.join(", ")}.
-- "say": the exact sentence, under 25 words, one question or statement, calm and polite.
-- Unverified identity + money → prefer verify_identity ("Alex asked me to check: ...") or offer_callback (Alex calls back on the number Alex already has).
-- A code or payment requested after a dodged or failed check → decline.
-- Ordinary everyday calls → helpful details (what it covers, get it in writing, confirm a corrected value).
-- Exactly one option has "suggested": true. Don't repeat an asked or answered category unless the caller dodged it.
-- "answered": on-screen categories the caller already answered, with the turn id.
-
+Lines the assistant already used (categories): ${JSON.stringify(input.asked)}. Answered by the caller: ${JSON.stringify(input.answered)}.
+${input.strategy ? `Strategy from the senior planner (written after ${input.strategy.turnId}; follow it if it still fits the newest line): ${input.strategy.text}
+` : ""}Categories: ${CATEGORIES.join(", ")}.
+${lane === "planner" ? `"strategy": one private sentence for the faster model that writes the next lines: which rung or move comes next and why (e.g. "Caller dodged the family check; push the callback, then decline").
+` : ""}
 Return JSON only:
-{"directions":[{"category":"","label":"","say":"","why":"","whyTurnId":"","suggested":false}],"answered":[{"category":"","evidenceTurnId":""}]}`;
+{"directions":[{"category":"","label":"<2-5 words for Alex>","say":"","why":"","whyTurnId":"","suggested":true,"confidence":0.9}],"answered":[{"category":"","evidenceTurnId":""}]${lane === "planner" ? ',"strategy":""' : ""}}`;
 
   const r = await generateJson<Partial<PlannerOutput>>(opts.model, prompt, { timeoutMs: opts.timeoutMs, thinking: opts.thinking });
   if (!r.ok) return { ...r, model: opts.model, out: null };
@@ -118,13 +152,15 @@ Return JSON only:
       why: String(x.why ?? "").slice(0, 120),
       whyTurnId: ids.has(x.whyTurnId as string) ? x.whyTurnId : null,
       suggested: !!x.suggested,
+      confidence: Math.max(0, Math.min(1, Number(x.confidence) || 0.5)),
     }));
   if (!directions.length && !dropped.length) dropped.push(`empty: ${JSON.stringify(r.data).slice(0, 160)}`);
   if (directions.length && directions.filter((x) => x.suggested).length !== 1) {
     directions = directions.map((x, i) => ({ ...x, suggested: i === 0 }));
   }
   const answered = arr<PlannerOutput["answered"][number]>(Array.isArray(r.data) ? [] : r.data!.answered).filter((a) => CATEGORIES.includes(a?.category) && ids.has(a?.evidenceTurnId));
-  return { ...r, model: opts.model, out: { directions, answered, dropped } as PlannerOutput };
+  const strategy = Array.isArray(r.data) ? "" : String(r.data!.strategy ?? "").trim().slice(0, 240);
+  return { ...r, model: opts.model, out: { directions, answered, dropped, strategy } as PlannerOutput };
 }
 
 // ---------------------------------------------------------------- Notes (Hydrogen): facts with corrections, open decision

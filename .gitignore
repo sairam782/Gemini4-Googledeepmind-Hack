@@ -36,6 +36,9 @@ yarn-error.*
 .env.local
 .env*.local
 
+# agent server call history and blocklist
+server/data/
+
 # typescript
 *.tsbuildinfo
 

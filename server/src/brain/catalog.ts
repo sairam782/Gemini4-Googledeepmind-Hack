@@ -11,6 +11,7 @@ export const SIGNS: Record<string, { label: string; weight: number }> = {
   emergency: { label: "Emergency story (accident, arrest, hospital)", weight: 2 },
   new_number: { label: "New number or \"lost my phone\"", weight: 2 },
   secrecy: { label: "Secrecy (\"don't tell Mom\")", weight: 2 },
+  authority_threat: { label: "Claims to be a bank, agency or company and threatens a freeze, fine, arrest or loss", weight: 3 },
   story_changes: { label: "Story contradicts itself about who they are or why they need money", weight: 2 },
   family_pass: { label: "Passes the family question", weight: -5 },
   callback_accepted: { label: "Accepts a callback on the saved number", weight: -4 },
@@ -24,7 +25,7 @@ export function levelFor(score: number): Level {
 
 /**
  * Score = sum of weights of active signs (each id counts once).
- * Locks as "High risk: confirmed" when High + a failed check + a money or code request,
+ * Locks as "High risk: confirmed" when High + a failed check + a money/code request or an authority threat,
  * all confirmed by the analyst. Once locked it stays locked for the call.
  */
 export function scoreRisk(signs: Sign[], wasLocked: boolean): RiskLevel {
@@ -36,7 +37,7 @@ export function scoreRisk(signs: Sign[], wasLocked: boolean): RiskLevel {
   const lockRule =
     levelFor(confirmedScore) === "High" &&
     (confirmedIds.has("family_fail") || confirmedIds.has("callback_refused")) &&
-    (confirmedIds.has("money") || confirmedIds.has("code"));
+    (confirmedIds.has("money") || confirmedIds.has("code") || confirmedIds.has("authority_threat"));
   return {
     level: wasLocked ? "High" : level,
     score,
@@ -61,7 +62,8 @@ export const STOCK: StockDirection[] = [
   { key: "decline", category: "decline", label: "Decline", say: "I can't share codes or send money. Alex will decide." },
 ];
 
-export const INTRO = "Hi, I'm Alex's AI assistant. Alex is listening. Who's calling, and how can I help?";
+// Short on purpose: the caller has usually said who they are already, and the agent's real answer follows right after.
+export const INTRO = "Hi, this is Alex's AI assistant. Alex is listening in.";
 
 /**
  * Last line of defence for anything the agent will say aloud. Returns a reason to block, or null.
@@ -76,8 +78,11 @@ export function guardSay(text: string): string | null {
   if (/\b(i|we|alex)('ll| will| can| am going to)\s+(send|pay|transfer|wire|venmo|zelle)\b/i.test(t)) return "commits to a payment";
   if (/\b(the code is|password is|pin is|here('s| is) the code)\b/i.test(t)) return "shares a code";
   if (/\b(private|note[sd]?|risk score|warning sign|scam)\b/i.test(t)) return "leaks private analysis";
-  if (/\bour\b|\bmy (childhood|family|pet|dog|cat|mom|dad|mother|father|grandma|grandmother|sister|brother|cousin|holiday)\b|\bbefore i (send|pay)\b|\bwe (all |both )?(visited|went|did|had|saw|used to|grew up|met|talked|spoke|always)\b/i.test(t))
+  if (/\bour\b|\bmy (childhood|family|pet|dog|cat|mom|dad|mother|father|grandma|grandmother|sister|brother|cousin|holiday)\b|\bbefore i (send|pay)\b|\bwhen we\b|\bwe (all |both )?(lived|were|grew|visited|went|did|had|saw|used to|met|talked|spoke|always|shared|played|stayed|called|took|ate)\b|\b(with|between) us\b/i.test(t))
     return "speaks as Alex or family instead of the assistant";
+  const refusal = /\b(won'?t|will not|doesn'?t|don'?t|never|can'?t|cannot|not)\b/i.test(t);
+  if (!refusal && /\blast (four|4)\b|\b(social security|ssn|date of birth|mother'?s maiden)\b|\b(what'?s|what is|tell me|give me|read me|read (it|that|the)|confirm|share|send me)\b[^.?!]{0,40}\b(account|card|routing) (number|digits)|\b(what'?s|what is|tell me|give me|read me|read (it|that|the)|share|send me)\b[^.?!]{0,30}\b(code|pin|password)\b/i.test(t))
+    return "asks the caller for sensitive details";
   if (/\b(end|hang up|disconnect)\b[^.]{0,20}\b(this|the) call\b/i.test(t)) return "ends the call (only Alex can)";
   return null;
 }

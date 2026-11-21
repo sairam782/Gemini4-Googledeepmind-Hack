@@ -3,6 +3,7 @@ import { LiveCall, type AgentVoice } from "./call.ts";
 import { Transcriber } from "./transcribe.ts";
 import { renderSpeech, ttsEnabled } from "./tts.ts";
 import { decodeMulaw, encodeMulaw, parseWav, pcmBytes, resample } from "./audio.ts";
+import { verifyStreamSig } from "./twilioAuth.ts";
 
 /**
  * Twilio Media Streams bridge (wss://<host>/twilio).
@@ -47,6 +48,7 @@ export function handleTwilioStream(ws: WebSocket) {
           if (call?.agentSpeaking !== turnId) return; // taken back while rendering
           const { samples, rate } = parseWav(wav);
           const ulaw = encodeMulaw(resample(samples, rate, 8000));
+          call.agentPlaying(turnId);
           for (let i = 0; i < ulaw.length; i += FRAME) {
             sendTwilio({ event: "media", streamSid, media: { payload: ulaw.subarray(i, i + FRAME).toString("base64") } });
           }
@@ -78,11 +80,27 @@ export function handleTwilioStream(ws: WebSocket) {
     } catch {
       return;
     }
+    try {
+      onMessage(m);
+    } catch (e) {
+      console.warn(`[twilio] message rejected: ${(e as Error).message}`);
+    }
+  });
+
+  const onMessage = (m: TwilioMsg) => {
+    if (!m || typeof m !== "object") return;
     switch (m.event) {
       case "start": {
-        const s = m.start!;
+        const s = m.start;
+        if (!s || typeof s.streamSid !== "string" || typeof s.callSid !== "string" || call) return;
         streamSid = s.streamSid;
         const p = s.customParameters ?? {};
+        const authToken = process.env.TWILIO_AUTH_TOKEN;
+        if (authToken && !verifyStreamSig(authToken, s.callSid, p.sig)) {
+          console.warn(`[twilio] rejected stream ${streamSid || "(unknown)"}: invalid signature`);
+          ws.close(1008, "invalid signature");
+          return;
+        }
         const from = p.from || "unknown number";
         const inContacts = p.inContacts ? p.inContacts === "true" : contacts.has(from.replace(/[^\d+]/g, ""));
         call = new LiveCall(s.callSid || streamSid, { from, inContacts });
@@ -94,21 +112,23 @@ export function handleTwilioStream(ws: WebSocket) {
         transcribers.push(caller);
         if (s.tracks?.includes("outbound")) {
           // Alex's side. Lines heard while the agent is talking are the agent's own audio: skip them.
-          alex = new Transcriber({ interim: (t) => c.interim("alex", t), final: (t) => !c.agentSpeaking && c.alex(t, "phone"), error: onErr }, "alex");
+          alex = new Transcriber({ interim: (t) => c.interim("alex", t), final: (t) => !c.agentAudible() && c.alex(t, "phone"), error: onErr }, "alex");
           transcribers.push(alex);
         }
         call.state();
         return;
       }
       case "media":
-        return feed(m.media?.track === "outbound" ? alex : caller, m.media!.payload);
+        if (typeof m.media?.payload !== "string") return;
+        return feed(m.media.track === "outbound" ? alex : caller, m.media.payload);
       case "mark":
-        return call?.agentDone(m.mark!.name);
+        if (typeof m.mark?.name === "string") call?.agentDone(m.mark.name);
+        return;
       case "stop":
         call?.end("caller hung up");
         return;
     }
-  });
+  };
 
   ws.on("close", () => {
     transcribers.forEach((t) => t.close());
@@ -117,13 +137,14 @@ export function handleTwilioStream(ws: WebSocket) {
 }
 
 /** TwiML for the Twilio number's voice webhook: stream the call to us, bidirectionally. */
-export function twiml(host: string, from: string) {
+export function twiml(host: string, from: string, sig?: string) {
   const esc = (s: string) => s.replace(/[<>&"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const sigParam = sig ? `\n      <Parameter name="sig" value="${esc(sig)}"/>` : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <Stream url="wss://${esc(host)}/twilio">
-      <Parameter name="from" value="${esc(from)}"/>
+      <Parameter name="from" value="${esc(from)}"/>${sigParam}
     </Stream>
   </Connect>
 </Response>`;

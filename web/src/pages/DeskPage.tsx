@@ -37,6 +37,9 @@ export function DeskPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [voiceOn, setVoiceOn] = useState(true);
   const [auto, setAuto] = useState(false);
+  const [liveCaller, setLiveCaller] = useState(true);
+  const [autoAt, setAutoAt] = useState<number | null>(null); // when the agent will speak its best line on its own
+  const [now, setNow] = useState(Date.now());
   const [typed, setTyped] = useState("");
   const [review, setReview] = useState<CallReview | null>(null);
   const [m, setM] = useState({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null as number | null, takeback: null as number | null });
@@ -93,18 +96,27 @@ export function DeskPage() {
         setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null);
         setM({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null, takeback: null });
         if (refs.current.voiceOn) msg.script.forEach((l) => void player().clip(l, CALLER_VOICE).catch(() => {}));
-        void player().clip("Hi, I'm Alex's AI assistant. Alex is listening. Who's calling, and how can I help?", AGENT_VOICE).catch(() => {});
+        void player().clip("Hi, this is Alex's AI assistant. Alex is listening in.", AGENT_VOICE).catch(() => {});
         break;
       case "state":
         setFloor(msg.floor); setRevision(msg.revision); setNextLine(msg.nextLine);
         break;
       case "turn.final":
         setTurns((t) => [...t, msg.turn]);
-        if (msg.turn.speaker === "caller" && refs.current.voiceOn) {
-          void player().clip(msg.turn.text, CALLER_VOICE).then((b) => player().play(b)).catch(() => {});
+        if (msg.turn.speaker === "caller") {
+          // Tell the server when the caller's line has been heard; the auto-speak clock starts there.
+          const done = () => send({ type: "desk.callerDone", turnId: msg.turn.turnId });
+          const wait = () => new Promise((r) => setTimeout(r, Math.min(4000, msg.turn.text.length * 55)));
+          if (refs.current.voiceOn) void player().clip(msg.turn.text, CALLER_VOICE).then((b) => player().play(b)).catch(wait).then(done);
+          else void wait().then(done);
         }
         break;
+      case "agent.autoPick":
+        setAutoAt(msg.directionId === null && msg.inMs === 0 ? null : Date.now() + msg.inMs);
+        break;
       case "agent.say":
+        setAutoAt(null);
+        if (msg.auto) flash("No tap in time: ReVoice said its most confident line");
         void speakAgent(msg.turnId, msg.text);
         break;
       case "agent.cut":
@@ -178,8 +190,14 @@ export function DeskPage() {
     if (refs.current.auto && refs.current.nextLine < refs.current.total) setTimeout(() => send({ type: "desk.next" }), 900);
   }
 
+  useEffect(() => {
+    if (!autoAt) return;
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, [autoAt]);
+
   // ---- controls
-  const start = () => send({ type: "desk.start", scenarioId });
+  const start = () => send({ type: "desk.start", scenarioId, mode: liveCaller ? "live" : "script" });
   const next = () => send({ type: "desk.next" });
   const delegate = () => {
     refs.current.tapAt = performance.now();
@@ -226,7 +244,7 @@ export function DeskPage() {
   const live = floor !== "ended";
   const fs =
     !live ? ["No call", scenario ? "Call ended. Start another scenario." : "Pick a scenario and start the call."]
-    : floor === "agent" ? [speaking ? "ReVoice is speaking" : "ReVoice has the floor", "Esc or Take back stops it instantly"]
+    : floor === "agent" ? [speaking ? "ReVoice is speaking" : autoAt ? `ReVoice speaks its best line in ${Math.max(0, Math.ceil((autoAt - now) / 1000))}s` : "ReVoice has the floor", autoAt && !speaking ? "Tap a direction to choose it yourself" : "Esc or Take back stops it instantly"]
     : ["You have the floor", "ReVoice is listening, scoring and suggesting"];
 
   return (
@@ -234,17 +252,20 @@ export function DeskPage() {
       <div className="top">
         <div>
           <h1>Brain test desk</h1>
-          <p className="hint" style={{ margin: 0 }}>Scripted calls stand in for Twilio. Every caller line fans out to the rules, Flash-Lite, Hydrogen risk and notes, Argon planner and Neon supervisor. Carbon reviews the call after hang-up.</p>
+          <p className="hint" style={{ margin: 0 }}>Gemini plays the caller live (or a fixed script) in place of Twilio. Every caller line fans out to the rules, Flash-Lite, Hydrogen risk and notes, Argon planner and Neon supervisor. Carbon reviews the call after hang-up.</p>
         </div>
         <div className="ctl">
           <select value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
             {scenarios.map((s) => <option key={s.id} value={s.id}>{s.title} · {s.kind}</option>)}
           </select>
           <button className="btn primary" onClick={start} disabled={ws !== "open"}>{live ? "Restart call" : "Start call"}</button>
-          <button className="btn soft" onClick={next} disabled={!live || nextLine >= script.length}>
-            Next caller line {script.length ? `(${nextLine}/${script.length})` : ""}
-          </button>
-          <label className="tog"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Auto after agent</label>
+          <label className="tog"><input type="checkbox" checked={liveCaller} onChange={(e) => setLiveCaller(e.target.checked)} /> Live caller (Gemini)</label>
+          {!liveCaller && <>
+            <button className="btn soft" onClick={next} disabled={!live || nextLine >= script.length}>
+              Next caller line {script.length ? `(${nextLine}/${script.length})` : ""}
+            </button>
+            <label className="tog"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Auto after agent</label>
+          </>}
           <label className="tog"><input type="checkbox" checked={voiceOn} onChange={(e) => { setVoiceOn(e.target.checked); if (!e.target.checked) voice.current?.stop(); }} /> Voices</label>
         </div>
       </div>
@@ -284,7 +305,7 @@ export function DeskPage() {
           <section className="card">
             <div className="ch"><h2>Guide the agent</h2><span className="tag">Only you</span></div>
             {!live && <p className="hint">Start a call to see suggestions.</p>}
-            {live && floor === "alex" && dirs.length > 0 && <p className="hint">Tap Agent take over, then a suggestion. Nothing is said until you tap.</p>}
+            {live && floor === "alex" && dirs.length > 0 && <p className="hint">Tap Agent take over. Tap a suggestion, or ReVoice says its most confident one after a few seconds.</p>}
             {live && floor === "agent" && speaking && <p className="hint">ReVoice is asking your question…</p>}
             {live && dirs.length === 0 && !speaking && <p className="hint">Listening… suggestions update after each caller line.</p>}
             <div className="dirs">
@@ -315,7 +336,7 @@ export function DeskPage() {
                   <p>{t.text}</p>
                 </div>
               ))}
-              {nextLine < script.length && live && <div className="turn upcoming"><div className="who">Next scripted line</div><p>{script[nextLine]}</p></div>}
+              {!liveCaller && nextLine < script.length && live && <div className="turn upcoming"><div className="who">Next scripted line</div><p>{script[nextLine]}</p></div>}
             </div>
             <div className="free">
               <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Type a line live…" disabled={!live}

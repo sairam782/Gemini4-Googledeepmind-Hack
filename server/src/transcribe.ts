@@ -21,11 +21,19 @@ export class Transcriber {
   private openedAt = 0;
   private closed = false;
   private queue: string[] = [];
+  private failures = 0;
+  private retryAt = 0; // after a failed connect, wait before trying again (1 s, 2 s, 4 s ... max 15 s)
 
   constructor(private on: TranscriberEvents, readonly label = "caller") {}
 
   private connect() {
-    if (!ai) throw new Error("GEMINI_API_KEY is not set");
+    if (!ai) {
+      // Report once and drop audio; never throw into the socket handler.
+      if (!this.closed) this.on.error?.(`${this.label} transcriber: GEMINI_API_KEY is not set`);
+      this.closed = true;
+      this.queue = [];
+      return;
+    }
     this.openedAt = Date.now();
     this.connecting = ai.live
       .connect({
@@ -49,11 +57,14 @@ export class Transcriber {
         },
       })
       .then((s) => {
+        this.failures = 0;
         this.session = s;
         for (const chunk of this.queue.splice(0)) this.sendNow(chunk);
       })
       .catch((e) => {
         this.connecting = null;
+        this.failures++;
+        this.retryAt = Date.now() + Math.min(15_000, 1000 * 2 ** (this.failures - 1));
         this.on.error?.(`${this.label} transcriber failed to connect: ${(e as Error).message}`);
       });
   }
@@ -70,7 +81,7 @@ export class Transcriber {
     if (this.session) return this.sendNow(b64);
     this.queue.push(b64);
     if (this.queue.length > 500) this.queue.shift();
-    if (!this.connecting) this.connect();
+    if (!this.connecting && Date.now() >= this.retryAt) this.connect(); // audio keeps queueing meanwhile
   }
 
   private sendNow(b64: string) {

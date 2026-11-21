@@ -6,6 +6,10 @@ import { renderSpeech, ttsEnabled } from "./tts.ts";
 import { DeskSession } from "./desk.ts";
 import { calls, findCall } from "./call.ts";
 import { handleTwilioStream, twiml } from "./twilio.ts";
+import { appAllowed, appTokenSet, bearer } from "./auth.ts";
+import { streamSig, verifyTwilioRequest } from "./twilioAuth.ts";
+import { listCalls, loadCall } from "./store.ts";
+import { isBlocked } from "./blocklist.ts";
 import type { DeskClientMsg } from "../../shared/brain.ts";
 
 const PORT = Number(process.env.API_PORT || 8787);
@@ -19,15 +23,34 @@ const http = createServer(async (req, res) => {
     // Twilio voice webhook → TwiML that streams the call to /twilio.
     if (req.method === "POST" && req.url?.startsWith("/twilio/voice")) {
       const form = new URLSearchParams(await body(req));
-      const host = process.env.PUBLIC_HOST || req.headers["x-forwarded-host"] || req.headers.host || "";
+      const host = String(process.env.PUBLIC_HOST || req.headers["x-forwarded-host"] || req.headers.host || "");
+      const authToken = process.env.TWILIO_AUTH_TOKEN;
+      let sig: string | undefined;
+      if (authToken) {
+        const hdr = req.headers["x-twilio-signature"];
+        const fullUrl = `https://${host}${req.url}`;
+        if (!verifyTwilioRequest(authToken, typeof hdr === "string" ? hdr : undefined, fullUrl, form)) {
+          return json(res, 403, { error: "invalid twilio signature" });
+        }
+        sig = streamSig(authToken, form.get("CallSid") || "");
+      }
       res.writeHead(200, { "content-type": "text/xml" });
-      return res.end(twiml(String(host), form.get("From") || "unknown"));
+      // Numbers Alex blocked through a follow-up are rejected before anything is streamed.
+      if (isBlocked(form.get("From") || "")) return res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>');
+      return res.end(twiml(host, form.get("From") || "unknown", sig));
+    }
+    if (req.url?.startsWith("/api/calls") && !appAllowed(req, bearer(req))) return json(res, 401, { error: "app token required" });
+    if (req.method === "GET" && req.url === "/api/calls") {
+      return json(res, 200, listCalls(calls.values()));
     }
     const rev = req.method === "GET" && /^\/api\/calls\/([^/]+)\/review$/.exec(req.url ?? "");
     if (rev) {
-      const call = findCall(decodeURIComponent(rev[1]));
-      if (!call) return json(res, 404, { error: "no such call" });
-      return json(res, call.review ? 200 : 202, call.review ?? { pending: true, ended: call.ended });
+      const id = decodeURIComponent(rev[1]);
+      const call = findCall(id);
+      if (call) return json(res, call.review ? 200 : 202, call.review ?? { pending: true, ended: call.ended });
+      const saved = loadCall(id);
+      if (saved) return json(res, 200, saved.review);
+      return json(res, 404, { error: "no such call" });
     }
     if (req.method === "POST" && req.url === "/api/tts") {
       const { text, voice } = JSON.parse(await body(req)) as { text?: string; voice?: string };
@@ -55,7 +78,7 @@ http.on("upgrade", (req, socket, head) => {
   else socket.destroy();
 });
 
-wss.on("connection", (ws: WebSocket) => {
+wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   let room: CallRoom | null = null;
   let role: Role | null = null;
   let desk: DeskSession | null = null;
@@ -67,7 +90,14 @@ wss.on("connection", (ws: WebSocket) => {
     } catch {
       return;
     }
-    if (desk) return desk.handle(msg as DeskClientMsg);
+    // Valid JSON of the wrong shape (null, a number, missing fields) must never reach a handler that throws.
+    if (!msg || typeof msg !== "object" || typeof (msg as { type?: unknown }).type !== "string") return;
+    try {
+      if (desk) return desk.handle(msg as DeskClientMsg);
+    if (msg.type === "join" && msg.role === "app" && !appAllowed(req, msg.token)) {
+      ws.send(JSON.stringify({ type: "error", message: "app token required to join a live call" }));
+      return ws.close(4401, "unauthorized");
+    }
     if (msg.type === "join" && (msg.role === "desk" || msg.role === "app")) {
       desk = new DeskSession(ws, msg.role, msg.callId);
       console.log(`${msg.role} joined${msg.role === "app" ? ` ${msg.callId}` : ""}`);
@@ -83,6 +113,9 @@ wss.on("connection", (ws: WebSocket) => {
       return;
     }
     if (room && role) room.handle(role, msg as ClientMsg);
+    } catch (e) {
+      console.warn(`ws message rejected: ${(e as Error).message}`);
+    }
   });
 
   ws.on("close", () => {
@@ -94,8 +127,10 @@ wss.on("connection", (ws: WebSocket) => {
   });
 });
 
+if (!appTokenSet()) console.warn("APP_TOKEN not set: only this machine can join live calls. Set it before exposing the server.");
 http.listen(PORT, () => {
   console.log(`ReVoice server on http://localhost:${PORT}  (tts: ${ttsEnabled() ? "on" : "off, no GEMINI_API_KEY"})`);
+  if (!process.env.TWILIO_AUTH_TOKEN) console.warn("Twilio signature check OFF");
 });
 
 function json(res: ServerResponse, status: number, data: unknown) {
