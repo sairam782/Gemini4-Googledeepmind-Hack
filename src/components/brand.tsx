@@ -4,7 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Brand, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
-/** "Uno ReVoice" in the logo colours: coral Uno, ink Re, green Voice. */
+/** "Uno ReVoice" as in the wordmark: navy, with "Re" in red. */
 export function Wordmark({ size = 36 }: { size?: number }) {
   const theme = useTheme();
   return (
@@ -12,9 +12,9 @@ export function Wordmark({ size = 36 }: { size?: number }) {
       accessibilityRole="header"
       accessibilityLabel="Uno ReVoice"
       style={[styles.word, { fontSize: size, lineHeight: size * 1.15 }]}>
-      <Text style={{ color: Brand.coral }}>Uno </Text>
-      <Text style={{ color: theme.text }}>Re</Text>
-      <Text style={{ color: Brand.green }}>Voice</Text>
+      <Text style={{ color: theme.text }}>Uno </Text>
+      <Text style={{ color: Brand.red }}>Re</Text>
+      <Text style={{ color: theme.text }}>Voice</Text>
     </Text>
   );
 }

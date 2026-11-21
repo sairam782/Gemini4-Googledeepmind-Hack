@@ -16,7 +16,7 @@ Unknown caller ──► Alex's phone declines it (Android) / silences it (iPhon
 | `server/` | **Agent server** (TypeScript): Twilio bridge, Gemini transcription, the multi-model brain, call review | `cd server && npm install && npm run dev` |
 | `web/` | **Brain test desk** (Vite + React) for the server | `cd web && npm install && npm run dev` |
 | `shared/` | Event contract shared by `server/` and `web/` (`shared/brain.ts`) | – |
-| `twilio-server/` | **Phone app's server**: answers forwarded calls on the Twilio number and talks to the phone app over `/app` | `cd twilio-server && npm install && npm start` |
+| `twilio-server/` | **Phone server (Live mode)**: answers forwarded calls on the SignalWire number with a Gemini Live agent and talks to the phone app over `/app` | `cd twilio-server && npm install && npm start` |
 
 Each folder installs on its own. The root `package.json` belongs to the phone app, so there is no npm workspace; `web/` uses React 18 and the app uses React 19, and they must not share `node_modules`. From the root, `npm run dev:agent` starts `server/` and `web/` together (install both first).
 
@@ -26,7 +26,7 @@ Each folder installs on its own. The root `package.json` belongs to the phone ap
 | --- | --- |
 | Phone app | Built: Live call, History and Setup screens, demo calls, Android call check, forwarding codes, push handling. |
 | Agent server + brain | Built in `server/`: 56/56 evals pass on the 8 scripted calls (see below). |
-| **Two paths, on purpose** | The **phone app** talks to `twilio-server/` using the [phone app contract](#phone-app-server-contract) (`/app` socket, `/api/...` routes). The phone app's **AI simulation** and the web test desk talk to `server/` over `/ws` with `shared/brain.ts` events. Both stay; testing goes through the phone app. |
+| **Two servers, on purpose** | **Live** mode talks to `twilio-server/` (SignalWire + Gemini Live) using the [phone app contract](#phone-app-server-contract). **Simulation** mode and the web test desk talk to `server/` over `/ws` with `shared/brain.ts` events. See [Modes](#modes). |
 
 Until `twilio-server/` is running and set in the app's Setup screen, the phone app's demo calls are the only way to see the Live call screen.
 
@@ -194,6 +194,10 @@ The earlier two-laptop WebRTC prototype is still in place: `/alex`, `/caller`, `
 
 # Phone app
 
+## Brand
+
+Navy ink `#141A33`, red `#C8372D` (the "Re" and the phone) and warm cream `#FFF4E8` with white cards. Source files are in [`assets/brand/`](assets/brand) (rounded icon, square icon, wordmark); the app icons, Android adaptive icons and splash in `assets/images/` are rendered from them. Colours live in [`src/constants/theme.ts`](src/constants/theme.ts). Green is used only to mean safe / real / connected.
+
 ## Screens
 
 | Screen | What it shows |
@@ -229,29 +233,34 @@ The Twilio Account SID and Auth Token stay on the server. Never put them in the 
 
 Push notifications need an EAS project. Run `npx eas-cli@latest init` once, then rebuild.
 
-## Switch: phone calls or AI simulation
+## Modes
 
-Setup → **Agent server** has a switch:
+Setup → **Mode** (top of the screen). A small badge on the Live call screen shows the current mode.
 
-| Setting | App listens to | Calls come from |
-| --- | --- | --- |
-| **Phone calls** (default) | `twilio-server/` at the server address, over `/app` | Real calls forwarded to the Twilio number |
-| **AI simulation** | Abhi's `server/` (default `http://localhost:8787`), over `/ws` | Calls started on this phone or on the web test desk |
+| Mode | Calls come from | Server | Buttons on the Live call screen |
+| --- | --- | --- | --- |
+| **Demo** | Scripted scam and real calls ([`src/lib/demo.ts`](src/lib/demo.ts)) | None, works offline: the backup during judging | Start scam / real demo call |
+| **Simulation** | A Gemini-played caller on the team's agent server (`server/`), started from the phone or the web desk | `http://localhost:8787` (Setup → Simulation server address) | Incoming scam / real call |
+| **Live** (default) | Real calls forwarded to the SignalWire number +1 208 485 0663 | `twilio-server/` via ngrok (Setup → Phone server address) | – (calls arrive on their own) |
 
-### Simulate an incoming call on the phone (no Twilio)
+All three feed the same events (`call.started`, `transcript`, `signal`, `verdict`, `call.ended`) into the same Live call screen. **Join · End · Block** work in every mode; **Steer** (a private instruction for the agent's next line, `POST /api/calls/:callId/say`) appears on Live calls. The team server has no free-text steering, so Simulation calls don't show it.
 
-1. Put `GEMINI_API_KEY` in `.env` and run `npm run server`.
-2. On the Live call tab, tap **Incoming scam call** or **Incoming real call** (or open `unorevoice:///?simulate=scam`).
+### Simulation
 
-The phone starts a live-caller scenario on the agent server: Gemini plays the caller and reacts to what it hears, and the agent answers right away. The phone shows the "Unknown caller" notification and the Live call screen and plays both voices (Gemini TTS). **Join** takes the call over from the agent, **End** hangs up, **Block** saves the number on the phone. Code: [`src/lib/phone-sim.ts`](src/lib/phone-sim.ts), [`src/lib/voice.ts`](src/lib/voice.ts), [`src/lib/simulation.ts`](src/lib/simulation.ts) (turns the server's `shared/brain.ts` events into the app's events).
+1. Put `GEMINI_API_KEY` in the root `.env` and run `npm run server`.
+2. Setup → **Simulation**. On the Live call tab, tap **Incoming scam call** or **Incoming real call** (or open `unorevoice:///?simulate=scam`).
 
-With **AI simulation** selected, the app also follows calls started on the web desk. On a real phone or through ngrok, use your computer's network address (or the ngrok address) and fill in **App token** with the server's `APP_TOKEN`; the server only skips the token for its own computer.
+Gemini plays the caller and reacts to what it hears, the agent answers right away, and the phone plays both voices. Calls started on the web desk show up too. On a real phone, use your computer's network address (or an ngrok address) and fill in **App token** with the server's `APP_TOKEN`. Code: [`src/lib/phone-sim.ts`](src/lib/phone-sim.ts), [`src/lib/voice.ts`](src/lib/voice.ts), [`src/lib/simulation.ts`](src/lib/simulation.ts).
 
-To change the default without tapping, set `EXPO_PUBLIC_BACKEND=web` (and optionally `EXPO_PUBLIC_SIM_SERVER_URL`) in `.env.local`. A choice saved in Setup wins.
+### Live
+
+See [`twilio-server/README.md`](twilio-server/README.md): run the server, `ngrok http 3000`, point the SignalWire number at `https://<ngrok-host>/voice`, then Setup → **Live** with `https://<ngrok-host>` and **Save and connect**.
+
+To change the default mode without tapping, set `EXPO_PUBLIC_MODE=demo|simulation|live` in `.env.local`. A choice saved in Setup wins.
 
 ## Phone app: server contract
 
-This is what the app expects from `twilio-server/`. It is separate from the agent server's [`/ws` API](#api-for-the-phone-app), which is for the web desk.
+This is what the app expects from `twilio-server/` (Live mode). It is separate from the agent server's [`/ws` API](#api-for-the-phone-app), which is for the web desk.
 
 ### WebSocket: server → app
 
@@ -279,6 +288,7 @@ All requests are `POST` with a JSON body. Every route is defined in [`src/lib/se
 | `/api/safe-words` | `phone`, `safeWords: [{name, word}]` | Saves the safe words the agent checks (HTTPS only). Not called while safe words are off. |
 | `/api/calls/:callId/join` | `phone` | Twilio rings `phone` and bridges it into the call |
 | `/api/calls/:callId/end` | – | Hangs up, then sends `call.ended` |
+| `/api/calls/:callId/say` | `text` | Steering: a private instruction the agent follows in its next line |
 | `/api/block` | `phone`, `number`, `callId` | Adds `number` to the block list |
 
 ### Push notification
@@ -328,7 +338,7 @@ iOS doesn't let apps decide per call. Go to **Settings → Apps → Phone → Sc
 
 ## Later
 
-- [ ] **Finish `twilio-server/` for the phone app.** Serve every route in the [phone app contract](#phone-app-server-contract) and plug in Gemini.
+- [ ] **Test Live mode end to end** with a real forwarded call (see `twilio-server/README.md`).
 - [ ] **Bring back family safe words.** Set `FEATURES.safeWords` to `true` in [`src/constants/features.ts`](src/constants/features.ts). The Setup section, secure storage, upload (`/api/safe-words`) and on-screen masking are already built. The server then needs to store them and give them to the agent, which asks callers who claim to be family. They are stored in the phone's secure storage, sent only over HTTPS, and replaced with `•••` if they appear in a transcript or verdict.
 
 ## Phone app layout

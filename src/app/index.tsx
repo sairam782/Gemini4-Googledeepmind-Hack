@@ -1,22 +1,23 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View, type ScrollViewInstance } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, TextInput, View, type ScrollViewInstance } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BrandHeader } from '@/components/brand';
 import { Bubble, WarningSigns } from '@/components/transcript';
 import { BigButton, Card, StatusLine, T } from '@/components/ui';
 import { VerdictCard } from '@/components/verdict-card';
-import { BottomTabInset, Spacing } from '@/constants/theme';
+import { BottomTabInset, Brand, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { block, end, join } from '@/lib/actions';
+import { block, canSteer, end, join, steer } from '@/lib/actions';
 import { callStore, dismissCall, type LiveCall } from '@/lib/call';
 import { connectionStore, type ConnectionStatus } from '@/lib/connection';
 import { startDemo } from '@/lib/demo';
 import { startPhoneSim, type SimKind } from '@/lib/phone-sim';
+import { isSimCall } from '@/lib/simulation';
 import { formatNumber } from '@/lib/phone';
 import { redactSafeWords } from '@/lib/redact';
-import { safeWordsStore, useStore } from '@/lib/store';
+import { safeWordsStore, settingsStore, useStore, type AppMode } from '@/lib/store';
 
 export default function LiveCallScreen() {
   const call = useStore(callStore);
@@ -29,6 +30,7 @@ export default function LiveCallScreen() {
 }
 
 const CONNECTION_TEXT: Record<ConnectionStatus, { ok: boolean | null; text: string }> = {
+  demo: { ok: null, text: 'Demo mode: scripted calls, no server.' },
   'not-set-up': { ok: null, text: 'Not connected. Set up the server in Setup.' },
   connecting: { ok: null, text: 'Connecting to the agent…' },
   online: { ok: true, text: 'Agent is ready to screen calls' },
@@ -38,6 +40,7 @@ const CONNECTION_TEXT: Record<ConnectionStatus, { ok: boolean | null; text: stri
 function Idle() {
   const status = useStore(connectionStore);
   const c = CONNECTION_TEXT[status];
+  const { mode } = useStore(settingsStore);
   const [starting, setStarting] = useState<SimKind | null>(null);
   // Deep link for demos and shortcuts: unorevoice:///?simulate=scam (or real).
   const { simulate: linked } = useLocalSearchParams<{ simulate?: string }>();
@@ -64,6 +67,7 @@ function Idle() {
   return (
     <ScrollView contentContainerStyle={[styles.idle, { paddingBottom: BottomTabInset + Spacing.lg }]}>
       <BrandHeader />
+      <ModeBadge />
       <StatusLine ok={c.ok}>{c.text}</StatusLine>
       <Card style={styles.idleCard}>
         <T kind="title">No call right now</T>
@@ -72,27 +76,32 @@ function Idle() {
           here live.
         </T>
       </Card>
-      <T kind="label">Simulate an incoming call</T>
-      <T kind="muted">
-        The AI agent answers a caller played by Gemini, with voices. Needs the agent server (Setup → AI simulation
-        address).
-      </T>
-      <BigButton
-        title="Incoming scam call"
-        busy={starting === 'scam'}
-        disabled={starting !== null}
-        onPress={() => void simulate('scam')}
-      />
-      <BigButton
-        title="Incoming real call"
-        variant="neutral"
-        busy={starting === 'real'}
-        disabled={starting !== null}
-        onPress={() => void simulate('real')}
-      />
-      <T kind="label">Offline demo (no server)</T>
-      <BigButton title="Play scam demo call" variant="neutral" onPress={() => startDemo('scam')} />
-      <BigButton title="Play real demo call" variant="neutral" onPress={() => startDemo('real')} />
+      {mode === 'simulation' ? (
+        <>
+          <T kind="label">Simulate an incoming call</T>
+          <T kind="muted">The AI agent answers a caller played by Gemini, with voices.</T>
+          <BigButton
+            title="Incoming scam call"
+            busy={starting === 'scam'}
+            disabled={starting !== null}
+            onPress={() => void simulate('scam')}
+          />
+          <BigButton
+            title="Incoming real call"
+            variant="neutral"
+            busy={starting === 'real'}
+            disabled={starting !== null}
+            onPress={() => void simulate('real')}
+          />
+        </>
+      ) : null}
+      {mode === 'demo' ? (
+        <>
+          <T kind="label">Try it without a real call</T>
+          <BigButton title="Start scam demo call" onPress={() => startDemo('scam')} />
+          <BigButton title="Start real demo call" variant="neutral" onPress={() => startDemo('real')} />
+        </>
+      ) : null}
     </ScrollView>
   );
 }
@@ -136,10 +145,10 @@ function ActiveCall({ call }: { call: LiveCall }) {
   return (
     <View style={styles.flex}>
       <View style={styles.header}>
-        <T kind="label">
-          {call.demo ? 'Demo · ' : ''}
-          {state}
-        </T>
+        <View style={styles.headerRow}>
+          <T kind="label">{state}</T>
+          <ModeBadge mode={call.demo ? 'demo' : isSimCall(call.callId) ? 'simulation' : 'live'} />
+        </View>
         <T kind="hero" numberOfLines={1} adjustsFontSizeToFit>
           {formatNumber(call.from)}
         </T>
@@ -162,6 +171,7 @@ function ActiveCall({ call }: { call: LiveCall }) {
       </ScrollView>
 
       <View style={[styles.actions, { paddingBottom: BottomTabInset + Spacing.sm }]}>
+        {canSteer(call) ? <SteerBox /> : null}
         {call.ended ? (
           <View style={styles.actionRow}>
             {!call.blocked && call.from ? (
@@ -196,7 +206,62 @@ function ActiveCall({ call }: { call: LiveCall }) {
   );
 }
 
+const MODE_LABEL: Record<AppMode, string> = { demo: 'DEMO', simulation: 'SIMULATION', live: 'LIVE' };
+const MODE_COLOR: Record<AppMode, string> = { demo: '#7A7F95', simulation: Brand.green, live: Brand.red };
+
+/** Small pill showing the mode (or, during a call, where that call comes from). */
+function ModeBadge({ mode: forCall }: { mode?: AppMode }) {
+  const settings = useStore(settingsStore);
+  const mode = forCall ?? settings.mode;
+  return (
+    <View style={[styles.badge, { borderColor: MODE_COLOR[mode] }]} accessibilityLabel={`${mode} mode`}>
+      <Text style={[styles.badgeText, { color: MODE_COLOR[mode] }]}>{MODE_LABEL[mode]}</Text>
+    </View>
+  );
+}
+
+/** Steer: a private instruction for the agent's next line (Live calls). */
+function SteerBox() {
+  const theme = useTheme();
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    const t = text.trim();
+    if (!t) return;
+    setBusy(true);
+    try {
+      await steer(t);
+      setText('');
+    } catch (e) {
+      Alert.alert('Couldn’t steer the agent', e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <View style={styles.steer}>
+      <TextInput
+        value={text}
+        onChangeText={setText}
+        onSubmitEditing={() => void submit()}
+        placeholder="Steer the agent, e.g. “Ask for their full name”"
+        placeholderTextColor={theme.textSecondary}
+        returnKeyType="send"
+        editable={!busy}
+        style={[styles.steerInput, { color: theme.text, borderColor: theme.border, backgroundColor: theme.background }]}
+      />
+      <BigButton title="Send" variant="neutral" busy={busy} disabled={!text.trim()} style={styles.steerButton} onPress={() => void submit()} />
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.sm },
+  badge: { alignSelf: 'flex-start', borderWidth: 1.5, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
+  badgeText: { fontSize: 13, fontWeight: '800', letterSpacing: 1 },
+  steer: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.sm },
+  steerInput: { flex: 1, minHeight: 48, borderWidth: 1, borderRadius: 14, paddingHorizontal: 14, fontSize: 17 },
+  steerButton: { minHeight: 48, minWidth: 80 },
   screen: { flex: 1 },
   flex: { flex: 1 },
   idle: { padding: Spacing.md, gap: Spacing.md },

@@ -45,6 +45,6 @@ const styles = StyleSheet.create({
   bubbleAgent: { borderTopRightRadius: 6 },
   text: { fontSize: 18, lineHeight: 25 },
   signs: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  sign: { backgroundColor: '#FFE4E1', borderColor: Brand.coral, borderWidth: 1.5, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
-  signText: { color: '#8A1F17', fontSize: 16, fontWeight: '700' },
+  sign: { backgroundColor: '#FBE6E3', borderColor: Brand.red, borderWidth: 1.5, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  signText: { color: '#8C241C', fontSize: 16, fontWeight: '700' },
 });

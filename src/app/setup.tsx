@@ -30,7 +30,7 @@ import {
   safeWordsStore,
   settingsStore,
   useStore,
-  type Backend,
+  type AppMode,
   type Carrier,
   type SafeWord,
 } from '@/lib/store';
@@ -44,11 +44,11 @@ export default function SetupScreen() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={[styles.content, { paddingBottom: BottomTabInset + Spacing.xl }]}>
           <T kind="hero">Setup</T>
+          <ModeSection />
           <YourNumber />
           <Forwarding />
           {Platform.OS === 'android' ? <AndroidCallCheck /> : <IPhoneSilenceGuide />}
           {FEATURES.safeWords ? <SafeWords /> : null}
-          <ServerSection />
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -333,32 +333,41 @@ function SafeWords() {
 
 // ---------------------------------------------------------------------------
 
-const BACKENDS: { id: Backend; label: string }[] = [
-  { id: 'phone', label: 'Phone calls' },
-  { id: 'web', label: 'AI simulation' },
+const MODES: { id: AppMode; label: string }[] = [
+  { id: 'demo', label: 'Demo' },
+  { id: 'simulation', label: 'Simulation' },
+  { id: 'live', label: 'Live' },
 ];
 
-function ServerSection() {
+const MODE_HINT: Record<AppMode, string> = {
+  demo: 'Scripted scam and real calls. No server, works offline.',
+  simulation: 'The team’s agent server plays the caller with Gemini, with voices. No phone line needed.',
+  live: 'Real calls forwarded to the SignalWire number, answered by the Gemini agent.',
+};
+
+function ModeSection() {
   const settings = useStore(settingsStore);
   const status = useStore(connectionStore);
   const statusText = {
+    demo: '',
     'not-set-up': 'Not connected',
     connecting: 'Connecting…',
-    online: settings.backend === 'web' ? 'Connected to the simulation server' : 'Connected to the agent',
+    online: settings.mode === 'simulation' ? 'Connected to the simulation server' : 'Connected to the phone server',
     offline: 'Can’t reach the server. Retrying…',
   }[status];
 
   return (
-    <Section
-      title="Agent server"
-      hint="Phone calls: real calls forwarded to the Twilio number (twilio-server). AI simulation: the agent server (Abhi’s) runs calls with a Gemini-played caller, no Twilio needed.">
-      <Segmented<Backend>
-        options={BACKENDS}
-        value={settings.backend}
-        onChange={(backend) => void saveSettings({ ...settingsStore.get(), backend })}
+    <Section title="Mode" hint={MODE_HINT[settings.mode]}>
+      <Segmented<AppMode>
+        options={MODES}
+        value={settings.mode}
+        onChange={(mode) => void saveSettings({ ...settingsStore.get(), mode })}
       />
-      {settings.backend === 'web' ? <SimServerFields /> : <PhoneServerFields />}
-      <StatusLine ok={status === 'online' ? true : status === 'offline' ? false : null}>{statusText}</StatusLine>
+      {settings.mode === 'simulation' ? <SimServerFields /> : null}
+      {settings.mode === 'live' ? <PhoneServerFields /> : null}
+      {settings.mode !== 'demo' ? (
+        <StatusLine ok={status === 'online' ? true : status === 'offline' ? false : null}>{statusText}</StatusLine>
+      ) : null}
     </Section>
   );
 }
@@ -438,10 +447,10 @@ function PhoneServerFields() {
   return (
     <>
       <Field
-        label="Server address"
+        label="Phone server address"
         value={draft}
         onChangeText={setDraft}
-        placeholder="https://uno-revoice.example.com"
+        placeholder="https://abcd.ngrok-free.app"
         autoCapitalize="none"
         autoCorrect={false}
         keyboardType="url"
@@ -473,7 +482,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: Brand.green,
+    backgroundColor: Brand.navy,
     alignItems: 'center',
     justifyContent: 'center',
   },

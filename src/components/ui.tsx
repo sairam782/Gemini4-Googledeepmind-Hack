@@ -136,7 +136,7 @@ export function Segmented<V extends string>({
 }
 
 export function StatusLine({ ok, children }: { ok: boolean | null; children: ReactNode }) {
-  const color = ok === null ? '#A39587' : ok ? Brand.green : Brand.coral;
+  const color = ok === null ? '#8D90A3' : ok ? Brand.green : Brand.red;
   return (
     <View style={styles.statusLine}>
       <View style={[styles.dot, { backgroundColor: color }]} />
