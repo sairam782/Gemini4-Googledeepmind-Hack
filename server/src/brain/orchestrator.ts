@@ -5,6 +5,9 @@ import { SIGNS, STOCK, scoreRisk } from "./catalog.ts";
 import { flagTurn } from "./rules.ts";
 import { plan, riskCheck, supervise, takeNotes, type CallContext } from "./lanes.ts";
 
+/** Stock card for each category, for playbook rules. */
+const STOCK_KEY: Record<DirectionCategory, string> = { verify_identity: "family", offer_callback: "callback", probe_details: "need", slow_down: "slow", decline: "decline", take_message: "message" };
+
 /** Runs a job with at most one in flight; calls made meanwhile collapse into one rerun. */
 export class SingleFlight {
   private busy = false;
@@ -21,7 +24,7 @@ export class SingleFlight {
       return;
     }
     this.busy = true;
-    this.running = this.job().finally(() => {
+    this.running = this.job().catch((e) => console.error("[brain] lane crashed:", e)).finally(() => {
       this.busy = false;
       this.running = null;
       if (this.pending && this.alive()) {
@@ -142,10 +145,10 @@ export class CallBrain {
         ? this.offerBoard(r.out.directions.map((d) => ({ ...d, id: this.nextId(), source: "flash" as const, revision: this.revision() })), turn.turnId)
         : "skipped";
       this.emit({ type: "lane.result", lane: "flash", model: r.model, turnId: turn.turnId, ms: r.ms, ok: !!r.out, note: r.out ? `${r.out.directions.length} directions${fresh ? (shown === "held" ? " (held while the agent has the floor)" : "") : " (not shown: planner or a newer turn got there first)"}${this.strategy ? " +strategy" : ""}${r.out.dropped.length ? `; guard dropped ${r.out.dropped.join("; ")}` : ""}` : r.error });
-    });
+    }).catch((e) => console.error("[brain] flash lane crashed:", e));
 
     // Risk lane: Hydrogen check of this turn.
-    void riskCheck(snapshot, turn).then((r) => {
+    void riskCheck(this.ctx, snapshot, turn).then((r) => {
       if (this.ended) return;
       this.emit({ type: "lane.result", lane: "risk", model: r.model, turnId: turn.turnId, ms: r.ms, ok: r.ok, note: r.ok ? r.signs.map((s) => s.id).join(", ") || "no signs" : r.error });
       const before = this.activeSignIds().length;
@@ -153,7 +156,7 @@ export class CallBrain {
       if (this.activeSignIds().length === before) return;
       this.rescore();
       if (this.directionsFor === turn.turnId && this.answeredTurnId !== turn.turnId && this.directions.length && this.directions.every((d) => d.source === "stock")) this.stockDirections(turn);
-    });
+    }).catch((e) => console.error("[brain] risk lane crashed:", e));
 
     // Notes, planner and supervisor: one in flight each, reruns collapse.
     this.notesLane.kick();
@@ -168,7 +171,9 @@ export class CallBrain {
     if (!def) return;
     const cur = this.signs.get(id);
     if (!cur) {
-      const s: Sign = { id, label: def.label, weight: def.weight, evidenceTurnId: turnId, status, source: lane, ...(status === "confirmed" ? { confirmedBy: lane } : {}) };
+      // The playbook can shift a weight by a point or two (clamped in code, never flips a sign).
+      const weight = def.weight + (this.ctx.playbook?.weightDelta[id] ?? 0);
+      const s: Sign = { id, label: def.label, weight, evidenceTurnId: turnId, status, source: lane, ...(status === "confirmed" ? { confirmedBy: lane } : {}) };
       this.signs.set(id, s);
       this.emit({ type: "risk.signal", sign: s });
       return;
@@ -274,10 +279,12 @@ export class CallBrain {
     const forTurn = this.lastCallerTurn();
     if (!forTurn) return;
     const callerIds = new Set(turns.filter((t) => t.speaker === "caller").map((t) => t.turnId));
+    const shownProvisional = [...this.signs.values()].filter((s) => s.status === "provisional").map((s) => ({ id: s.id, evidenceTurnId: s.evidenceTurnId }));
+    const shownKeys = new Set(shownProvisional.map((s) => `${s.id}@${s.evidenceTurnId}`));
     const r = await supervise({
       ctx: this.ctx,
       turns,
-      provisional: [...this.signs.values()].filter((s) => s.status === "provisional").map((s) => ({ id: s.id, evidenceTurnId: s.evidenceTurnId })),
+      provisional: shownProvisional,
       onScreen: this.directions.map((d) => ({ id: d.id, label: d.label, say: d.say })),
     });
     if (this.ended && !this.finishing) return;
@@ -292,7 +299,7 @@ export class CallBrain {
     const neonIds = new Set(out.signs.map((s) => s.id));
     out.signs.forEach((s) => this.upsertSign(s.id, s.evidenceTurnId, "supervisor", "confirmed"));
     for (const s of this.signs.values()) {
-      if (s.status === "provisional" && callerIds.has(s.evidenceTurnId) && !neonIds.has(s.id)) {
+      if (s.status === "provisional" && callerIds.has(s.evidenceTurnId) && shownKeys.has(`${s.id}@${s.evidenceTurnId}`) && !neonIds.has(s.id)) {
         s.status = "removed";
         this.emit({ type: "risk.signal", sign: s });
       }
@@ -327,6 +334,16 @@ export class CallBrain {
     if (!this.has("money") && !done("probe_details")) pick.push({ key: "need", why: "Request is still unclear", whyTurnId: turn.turnId });
     if (pick.length < 3 && !done("probe_details")) pick.push({ key: "who", why: "Caller's details are thin", whyTurnId: turn.turnId });
 
+    // Playbook: a learned rule can move a card to the front ("suggest the family check before money talk").
+    const pref = this.preferred();
+    if (pref && (pref.category === "decline" || (!this.locked && !this.has("code")))) {
+      const key = STOCK_KEY[pref.category];
+      const at = pick.findIndex((p) => p.key === key);
+      const entry = at >= 0 ? pick.splice(at, 1)[0] : { key, why: "Learned from earlier calls", whyTurnId: turn.turnId };
+      entry.why = `${entry.why} · playbook ${pref.id}`;
+      pick.unshift(entry);
+    }
+
     const seen = new Set<string>();
     const list = pick.filter((p) => !seen.has(p.key) && seen.add(p.key)).slice(0, 3);
     const dirs: Direction[] = list.map((p, i) => {
@@ -345,7 +362,25 @@ export class CallBrain {
    * A tailored board (Flash-Lite or Argon) for `forTurn`. Replacing stock cards or an older turn's board is
    * always fine; replacing tailored cards for the same turn waits while the agent has the floor.
    */
+  /** The first active playbook rule whose signs are all present and whose card hasn't been used yet. */
+  private preferred() {
+    const done = (c: DirectionCategory) => this.asked.includes(c) || this.answered.has(c);
+    return (this.ctx.playbook?.prefer ?? []).find(
+      (p) => p.whenSigns.every((s) => this.has(s)) && !(p.notInContactsOnly && this.ctx.inContacts) && !done(p.category),
+    ) ?? null;
+  }
+
+  /** Enforce the playbook on a model's board too: the preferred category becomes the suggested card. */
+  private applyPreference(dirs: Direction[]): Direction[] {
+    const pref = this.preferred();
+    if (!pref || (pref.category !== "decline" && (this.locked || this.has("code")))) return dirs;
+    const i = dirs.findIndex((d) => d.category === pref.category);
+    if (i < 0) return dirs;
+    return dirs.map((d, j) => ({ ...d, suggested: j === i, ...(j === i ? { why: `${d.why} · playbook ${pref.id}`.slice(0, 140) } : {}) }));
+  }
+
   private offerBoard(dirs: Direction[], forTurn: string): "shown" | "held" {
+    dirs = this.applyPreference(dirs);
     const sameTurnTailored = this.directionsFor === forTurn && this.directions.some((d) => d.source !== "stock");
     if (this.holdUpgrades() && sameTurnTailored) {
       this.held = { dirs, forTurn };
@@ -381,14 +416,21 @@ export class CallBrain {
 
   /**
    * The line the agent says on its own when Alex doesn't tap in time: the highest-confidence card for the
-   * newest caller turn, preferring a fresher held upgrade, and tailored cards over stock on a tie.
+   * newest caller turn. Commit a held upgrade when the agent actually speaks, so the event log
+   * can match the spoken line to its card and the countdown refers to the visible board.
    */
-  bestDirection(): Direction | null {
-    const last = this.lastCallerTurn()?.turnId;
-    if (this.held && this.held.forTurn === last && this.held.dirs.length) {
-      this.directions = this.held.dirs.filter((d) => !this.answered.has(d.category)).map((d) => ({ ...d, revision: this.revision() }));
-      this.directionsFor = this.held.forTurn;
-      this.held = null;
+  bestDirection(commitHeld = false): Direction | null {
+    const held = this.held;
+    if (commitHeld && held && held.forTurn === this.lastCallerTurn()?.turnId) {
+      const eligible = held.dirs.filter((d) => !this.answered.has(d.category));
+      if (eligible.length) {
+        this.setDirections(eligible.map((d) => ({ ...d, revision: this.revision() })), held.forTurn);
+      }
+    }
+    const preferred = this.preferred();
+    if (preferred && (preferred.category === "decline" || (!this.locked && !this.has("code")))) {
+      const suggested = this.directions.find((direction) => direction.suggested && direction.category === preferred.category);
+      if (suggested) return suggested;
     }
     const rank = (d: Direction) => [d.confidence, d.source === "stock" ? 0 : 1, d.suggested ? 1 : 0];
     return [...this.directions].sort((a, b) => {

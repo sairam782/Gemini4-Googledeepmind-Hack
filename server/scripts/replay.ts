@@ -37,7 +37,7 @@ function logger(t0: number, prefix: string) {
 }
 
 async function run(sc: Scenario, verbose: boolean): Promise<{ review: CallReview; actions: FollowUpAction[] }> {
-  const call = new LiveCall(`${sc.id}-replay`, { from: sc.from, inContacts: sc.inContacts }, sc.expected);
+  const call = new LiveCall(`${sc.id}-replay`, { from: sc.from, inContacts: sc.inContacts }, sc.expected, { source: "desk", scenarioId: sc.id, autoLearn: false });
   if (verbose) call.subscribe(logger(Date.now(), ""));
   const review = new Promise<CallReview>((resolve) => call.subscribe((m) => m.type === "call.review" && resolve(m.review), false));
   const actions = new Promise<FollowUpAction[]>((resolve) =>

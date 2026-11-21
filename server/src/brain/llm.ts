@@ -102,6 +102,14 @@ export async function generateJson<T>(
   opts: { timeoutMs: number; thinking?: "low" | "high" },
 ): Promise<JsonResult<T>> {
   const t0 = Date.now();
+  // Test seam: scripts/test-learn.ts installs a fake model to run the whole learning loop offline.
+  const mock = (globalThis as { __revoiceLlmMock?: (model: string, prompt: string) => unknown }).__revoiceLlmMock;
+  if (mock) {
+    const data = mock(model, prompt);
+    return data && typeof data === "object"
+      ? { ok: true, data: data as T, ms: 1, retries: 0 }
+      : { ok: false, ms: 1, error: "mock: no answer", retries: 0 };
+  }
   if (!ai) return { ok: false, ms: 0, error: "GEMINI_API_KEY not set", retries: 0 };
   const deadline = t0 + opts.timeoutMs;
   const abort = new AbortController();
@@ -123,7 +131,11 @@ export async function generateJson<T>(
         });
         const text = res.text ?? "";
         try {
-          return { ok: true, data: JSON.parse(text) as T, ms: Date.now() - t0, retries };
+          const data: unknown = JSON.parse(text);
+          if (data === null || typeof data !== "object") {
+            return { ok: false, ms: Date.now() - t0, error: "model response is not a JSON object or array", retries };
+          }
+          return { ok: true, data: data as T, ms: Date.now() - t0, retries };
         } catch {
           return { ok: false, ms: Date.now() - t0, error: `bad JSON: ${text.slice(0, 80)}`, retries };
         }

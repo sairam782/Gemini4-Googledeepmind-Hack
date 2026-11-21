@@ -55,6 +55,8 @@ export class DeskSession {
         return this.call?.callerAudioDone(m.turnId);
       case "desk.agentDone":
         return this.call?.agentDone(m.turnId);
+      case "call.label":
+        return this.call?.setLabel(m.label);
       case "control.delegate":
       case "control.takeback":
       case "direction.pick":
@@ -78,7 +80,7 @@ export class DeskSession {
     this.sim = null;
     this.scenario = sc;
     this.nextLine = 0;
-    const call = new LiveCall(`${sc.id}-${Date.now()}`, { from: sc.from, inContacts: sc.inContacts }, sc.expected);
+    const call = new LiveCall(`${sc.id}-${Date.now()}`, { from: sc.from, inContacts: sc.inContacts }, sc.expected, { source: "desk", scenarioId: sc.id });
     if (mode === "script") call.lineInfo = () => ({ nextLine: this.nextLine, totalLines: sc.script.length });
     this.send({ type: "call.started", callId: call.id, scenario: scenarioInfo(sc), script: sc.script });
     this.attach(call);

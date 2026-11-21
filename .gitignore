@@ -4,4 +4,6 @@ dist/
 .env.local
 *.log
 .DS_Store
+
+# Local call history, learning data and follow-up actions
 server/data/

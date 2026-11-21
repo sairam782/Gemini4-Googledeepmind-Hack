@@ -19,6 +19,9 @@ export const SIGNS: Record<string, { label: string; weight: number }> = {
 };
 export const SIGN_IDS = Object.keys(SIGNS);
 
+/** Older playbooks call this signal "threat". Keep those lessons usable after the merge. */
+export const canonicalSignId = (id: string) => id === "threat" ? "authority_threat" : id;
+
 export function levelFor(score: number): Level {
   return score >= 8 ? "High" : score >= 4 ? "Medium" : "Low";
 }
@@ -58,6 +61,7 @@ export const STOCK: StockDirection[] = [
   { key: "need", category: "probe_details", label: "Ask what they need", say: "What do you need from Alex right now?" },
   { key: "family", category: "verify_identity", label: "Ask something only family knows", say: "Quick check Alex asked me to do: can you tell me something only you and Alex would know?" },
   { key: "callback", category: "offer_callback", label: "Offer a callback", say: "Alex can call you back on the number Alex already has for you. Would that work?" },
+  { key: "message", category: "take_message", label: "Take a message", say: "What message should I pass along to Alex?" },
   { key: "slow", category: "slow_down", label: "Slow it down", say: "Alex wants to help. Let's take this one step at a time." },
   { key: "decline", category: "decline", label: "Decline", say: "I can't share codes or send money. Alex will decide." },
 ];

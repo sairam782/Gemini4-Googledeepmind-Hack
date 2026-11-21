@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type {
   CallReview, DeskClientMsg, DeskServerMsg, Direction, Floor, Lane, RiskLevel, ScenarioInfo, Sign, Turn,
 } from "../../../shared/brain.ts";
+import type { CriticReport, JudgeMetrics, Label } from "../../../shared/learn.ts";
 import { VoicePlayer } from "../lib/voice.ts";
 
 const AGENT_VOICE = "Kore";
@@ -42,6 +43,8 @@ export function DeskPage() {
   const [now, setNow] = useState(Date.now());
   const [typed, setTyped] = useState("");
   const [review, setReview] = useState<CallReview | null>(null);
+  const [critic, setCritic] = useState<{ report: CriticReport; metrics: JudgeMetrics; label: Label } | null>(null);
+  const [playbook, setPlaybook] = useState<Extract<DeskServerMsg, { type: "playbook.updated" }> | null>(null);
   const [m, setM] = useState({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null as number | null, takeback: null as number | null });
 
   const sock = useRef<WebSocket | null>(null);
@@ -93,7 +96,7 @@ export function DeskPage() {
       case "call.started":
         setScenario(msg.scenario);
         setScript(msg.script);
-        setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null);
+        setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null); setCritic(null); setPlaybook(null);
         setM({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null, takeback: null });
         if (refs.current.voiceOn) msg.script.forEach((l) => void player().clip(l, CALLER_VOICE).catch(() => {}));
         void player().clip("Hi, this is Alex's AI assistant. Alex is listening in.", AGENT_VOICE).catch(() => {});
@@ -157,6 +160,12 @@ export function DeskPage() {
         break;
       case "call.review":
         setReview(msg.review);
+        break;
+      case "critic.report":
+        setCritic({ report: msg.report, metrics: msg.metrics, label: msg.label });
+        break;
+      case "playbook.updated":
+        setPlaybook(msg);
         break;
       case "call.ended":
         player().stop();
@@ -388,6 +397,61 @@ export function DeskPage() {
           <p><b>{review.verdict}</b> · {review.finalLevel}{review.locked ? " (locked)" : ""}. {review.summary}</p>
           {review.followUps.map((f, i) => <div key={i} className="note">Follow-up: <strong>{f.action}</strong> <span className="was">{f.why}</span></div>)}
           {review.evals.map((e, i) => <div key={i} className="hint" style={{ margin: 0 }}>{e.pass ? "✓" : "✗"} {e.name}: {e.detail}</div>)}
+        </section>
+      )}
+
+      {review && (
+        <section className="card" style={{ marginTop: 14 }}>
+          <div className="ch">
+            <h2>Critic · what to do better next call</h2>
+            <span className="tag">{critic ? `${critic.report.model} · ${(critic.report.ms / 1000).toFixed(1)} s` : "reviewing…"}</span>
+          </div>
+          <div className="hint" style={{ margin: "0 0 8px" }}>
+            Was this a scam?{" "}
+            {(["scam", "legit", "unknown"] as Label[]).map((l) => (
+              <button key={l} className={critic?.label === l ? "primary" : ""} style={{ marginLeft: 6 }} onClick={() => { setCritic(null); send({ type: "call.label", label: l }); }}>
+                {l === "scam" ? "Yes" : l === "legit" ? "No" : "Not sure"}
+              </button>
+            ))}
+            {critic && <span style={{ marginLeft: 8 }}>label: {critic.label}</span>}
+          </div>
+          {critic && (
+            <>
+              <p>
+                {(["classification", "questioning", "timing", "safety"] as const).map((g) => (
+                  <span key={g} className="tag" style={{ marginRight: 6 }}>{g} {critic.report.grades[g]}/5</span>
+                ))}
+              </p>
+              <p>{critic.report.summary}</p>
+              <div className="hint" style={{ margin: "0 0 8px" }}>
+                Judge (code): {critic.metrics.verdictCorrect === null ? "no label" : critic.metrics.verdictCorrect ? "✓ right verdict" : "✗ wrong verdict"}
+                {" · "}High at caller line {critic.metrics.reachedHighAt ?? "never"}
+                {" · "}first check asked after line {critic.metrics.firstCheckAskedAt ?? "never"}
+                {" · "}money at line {critic.metrics.firstMoneyAt ?? "never"}
+                {critic.metrics.repeatedCategories.length ? ` · repeated: ${critic.metrics.repeatedCategories.join(", ")}` : ""}
+              </div>
+              {critic.report.findings.map((f, i) => (
+                <div key={i} className="note">
+                  <small>{f.type.replace(/_/g, " ")} · {f.turns.map(turnN).join(", ")}{f.severity >= 3 ? " · serious" : ""}</small>
+                  <strong>{f.whatHappened}</strong>
+                  {f.shouldHave && <span className="was">Better: {f.shouldHave}</span>}
+                </div>
+              ))}
+              {critic.report.proposed.map((l, i) => (
+                <div key={i} className="hint" style={{ margin: 0 }}>Lesson: when {l.when}: <b>{l.do}</b> <span className="was">{l.action.type}</span></div>
+              ))}
+              {critic.report.rejected.map((r, i) => <div key={i} className="hint" style={{ margin: 0 }}>✗ refused: {r}</div>)}
+            </>
+          )}
+          {playbook && (
+            <div className="hint" style={{ marginTop: 8 }}>
+              Playbook v{playbook.update.fromVersion} → v{playbook.version}
+              {playbook.update.added.length ? ` · added ${playbook.update.added.join(", ")}` : ""}
+              {playbook.update.reinforced.length ? ` · reinforced ${[...new Set(playbook.update.reinforced)].join(", ")}` : ""}
+              {playbook.update.promoted.length ? ` · promoted ${playbook.update.promoted.join(", ")}` : ""}
+              {" · "}{playbook.active.length} active lessons, used from the next call on.
+            </div>
+          )}
         </section>
       )}
 

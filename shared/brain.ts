@@ -1,6 +1,8 @@
 // Event contract for the ReVoice brain (v3 plan), used by the test desk today and the
 // phone app later. App code owns the floor, taps, scores and thresholds; models only propose.
 
+import type { CriticReport, JudgeMetrics, Label, Lesson, PlaybookUpdate } from "./learn.ts";
+
 export type Speaker = "caller" | "alex" | "agent";
 export type Floor = "alex" | "agent" | "ended";
 export type Level = "Low" | "Medium" | "High";
@@ -95,7 +97,9 @@ export type DeskClientMsg =
   | { type: "direction.pick"; actionId: string; revision: number; directionId: string }
   | { type: "call.end"; actionId: string; revision: number }
   | { type: "followup.approve"; actionId: string; followupId: string }
-  | { type: "followup.dismiss"; followupId: string };
+  | { type: "followup.dismiss"; followupId: string }
+  /** After hang-up: Alex answers "Was this a scam?". Re-runs the critic with that label. */
+  | { type: "call.label"; label: Label };
 
 /** Server → desk */
 export type DeskServerMsg =
@@ -122,4 +126,7 @@ export type DeskServerMsg =
   | { type: "lane.result"; lane: Lane; model: string; turnId: string; ms: number; ok: boolean; note?: string }
   | { type: "action.accepted"; actionId: string; revision: number }
   | { type: "action.rejected"; actionId: string; revision: number; reason: string }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** Review phase: the judge's numbers and the critic's report, a few seconds after call.review. */
+  | { type: "critic.report"; report: CriticReport; metrics: JudgeMetrics; label: Label }
+  | { type: "playbook.updated"; update: PlaybookUpdate; version: number; active: Pick<Lesson, "id" | "when" | "do" | "action" | "seen">[] };

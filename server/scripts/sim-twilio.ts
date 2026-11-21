@@ -109,7 +109,8 @@ await wait(8000);
 tw.send(JSON.stringify({ event: "stop", streamSid: "MZsim" }));
 log("twilio → stop (hang-up)");
 for (let i = 0; i < 90 && !review; i++) await wait(1000);
-const r = review as typeof review;
+// Assigned in a callback, so TypeScript narrows `review` to null here; widen it back.
+const r = review as Extract<DeskServerMsg, { type: "call.review" }>["review"] | null;
 log(`interim caption updates: ${interims}; agent clips: ${stats.marks}; clears: ${stats.clears}`);
 if (r) {
   console.log(`\nREVIEW ${r.finalLevel}${r.locked ? " LOCKED" : ""} verdict=${r.verdict}\n  ${r.summary}`);

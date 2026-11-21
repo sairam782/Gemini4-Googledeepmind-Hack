@@ -6,10 +6,14 @@
     "dev": "tsx watch --env-file-if-exists=../.env src/index.ts",
     "start": "tsx --env-file-if-exists=../.env src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "learn": "tsx --env-file-if-exists=../.env scripts/learn.ts",
+    "test:learn": "tsx scripts/test-learn.ts",
+    "learning-db": "node --import tsx --env-file-if-exists=../.env scripts/learning-db.ts"
   },
   "dependencies": {
     "@google/genai": "^1.30.0",
+    "postgres": "^3.4.9",
     "ws": "^8.18.0"
   },
   "devDependencies": {
