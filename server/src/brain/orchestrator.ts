@@ -6,7 +6,7 @@ import { flagTurn } from "./rules.ts";
 import { plan, riskCheck, supervise, takeNotes, type CallContext } from "./lanes.ts";
 
 /** Runs a job with at most one in flight; calls made meanwhile collapse into one rerun. */
-class SingleFlight {
+export class SingleFlight {
   private busy = false;
   private pending = false;
   constructor(private job: () => Promise<void>, private alive: () => boolean) {}
