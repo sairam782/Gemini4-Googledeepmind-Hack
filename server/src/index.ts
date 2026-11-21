@@ -7,6 +7,8 @@ import { DeskSession } from "./desk.ts";
 import { calls, findCall } from "./call.ts";
 import { handleTwilioStream, twiml } from "./twilio.ts";
 import { appAllowed, appTokenSet, bearer } from "./auth.ts";
+import { streamSig, verifyTwilioRequest } from "./twilioAuth.ts";
+import { listCalls, loadCall } from "./store.ts";
 import type { DeskClientMsg } from "../../shared/brain.ts";
 
 const PORT = Number(process.env.API_PORT || 8787);
@@ -20,16 +22,32 @@ const http = createServer(async (req, res) => {
     // Twilio voice webhook → TwiML that streams the call to /twilio.
     if (req.method === "POST" && req.url?.startsWith("/twilio/voice")) {
       const form = new URLSearchParams(await body(req));
-      const host = process.env.PUBLIC_HOST || req.headers["x-forwarded-host"] || req.headers.host || "";
+      const host = String(process.env.PUBLIC_HOST || req.headers["x-forwarded-host"] || req.headers.host || "");
+      const authToken = process.env.TWILIO_AUTH_TOKEN;
+      let sig: string | undefined;
+      if (authToken) {
+        const hdr = req.headers["x-twilio-signature"];
+        const fullUrl = `https://${host}${req.url}`;
+        if (!verifyTwilioRequest(authToken, typeof hdr === "string" ? hdr : undefined, fullUrl, form)) {
+          return json(res, 403, { error: "invalid twilio signature" });
+        }
+        sig = streamSig(authToken, form.get("CallSid") || "");
+      }
       res.writeHead(200, { "content-type": "text/xml" });
-      return res.end(twiml(String(host), form.get("From") || "unknown"));
+      return res.end(twiml(host, form.get("From") || "unknown", sig));
     }
     if (req.url?.startsWith("/api/calls") && !appAllowed(req, bearer(req))) return json(res, 401, { error: "app token required" });
+    if (req.method === "GET" && req.url === "/api/calls") {
+      return json(res, 200, listCalls(calls.values()));
+    }
     const rev = req.method === "GET" && /^\/api\/calls\/([^/]+)\/review$/.exec(req.url ?? "");
     if (rev) {
-      const call = findCall(decodeURIComponent(rev[1]));
-      if (!call) return json(res, 404, { error: "no such call" });
-      return json(res, call.review ? 200 : 202, call.review ?? { pending: true, ended: call.ended });
+      const id = decodeURIComponent(rev[1]);
+      const call = findCall(id);
+      if (call) return json(res, call.review ? 200 : 202, call.review ?? { pending: true, ended: call.ended });
+      const saved = loadCall(id);
+      if (saved) return json(res, 200, saved.review);
+      return json(res, 404, { error: "no such call" });
     }
     if (req.method === "POST" && req.url === "/api/tts") {
       const { text, voice } = JSON.parse(await body(req)) as { text?: string; voice?: string };
@@ -103,6 +121,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
 if (!appTokenSet()) console.warn("APP_TOKEN not set: only this machine can join live calls. Set it before exposing the server.");
 http.listen(PORT, () => {
   console.log(`ReVoice server on http://localhost:${PORT}  (tts: ${ttsEnabled() ? "on" : "off, no GEMINI_API_KEY"})`);
+  if (!process.env.TWILIO_AUTH_TOKEN) console.warn("Twilio signature check OFF");
 });
 
 function json(res: ServerResponse, status: number, data: unknown) {

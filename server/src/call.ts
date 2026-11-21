@@ -4,6 +4,7 @@ import { INTRO, STOCK, guardSay } from "./brain/catalog.ts";
 import { renderSpeech, ttsEnabled } from "./tts.ts";
 import { reviewCall } from "./brain/review.ts";
 import type { CallContext } from "./brain/lanes.ts";
+import { saveCall } from "./store.ts";
 
 type ControlMsg = Extract<DeskClientMsg, { actionId: string }>;
 type Listener = (m: DeskServerMsg) => void;
@@ -26,6 +27,9 @@ export const findCall = (id: string) => calls.get(id === "latest" && latest ? la
  */
 export class LiveCall {
   readonly brain: CallBrain;
+  readonly from: string;
+  readonly startedAt = Date.now();
+  endedAt: number | null = null;
   floor: Floor = "alex";
   revision = 1;
   private speaking: string | null = null;
@@ -45,6 +49,7 @@ export class LiveCall {
     ctx: CallContext,
     private expected?: { level: Level; verdict: string },
   ) {
+    this.from = ctx.from;
     this.brain = new CallBrain(ctx, (m) => this.emit(m), () => this.revision);
     this.brain.holdUpgrades = () => this.floor === "agent";
     // Warm the speech cache with every line the agent can say before any model has run.
@@ -196,6 +201,7 @@ export class LiveCall {
     if (this.ended) return;
     if (this.speaking) this.voice?.cut(this.speaking);
     this.floor = "ended";
+    this.endedAt = Date.now();
     this.revision++;
     this.brain.ended = true;
     this.emit({ type: "call.ended", reason });
@@ -208,6 +214,7 @@ export class LiveCall {
     if (!snap.turns.some((t) => t.speaker === "caller")) return;
     const review = await reviewCall({ callId: this.id, ...snap, lanes: this.lanes, guardBlocks: this.guardBlocks, expected: this.expected });
     this.review = review;
+    saveCall({ callId: this.id, from: this.from, startedAt: this.startedAt, endedAt: this.endedAt ?? Date.now(), review });
     this.emit({ type: "lane.result", lane: "review", model: review.model, turnId: snap.turns.at(-1)!.turnId, ms: review.ms, ok: !review.summary.startsWith("Review model failed"), note: `${review.verdict}; ${review.evals.filter((e) => e.pass).length}/${review.evals.length} evals pass` });
     this.emit({ type: "call.review", review });
     setTimeout(() => calls.delete(this.id), 30 * 60_000); // keep reviews readable for a while
