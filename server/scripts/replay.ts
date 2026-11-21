@@ -1,7 +1,7 @@
 // Headless replay of scripted calls through the full pipeline, ending with the Carbon review and evals.
 //   npx tsx --env-file=../.env scripts/replay.ts maya [gapMs]     one call, full event log
 //   npx tsx --env-file=../.env scripts/replay.ts all [gapMs]      every scenario in parallel, eval table
-import type { CallReview, DeskServerMsg } from "../../shared/brain.ts";
+import type { CallReview, DeskServerMsg, FollowUpAction } from "../../shared/brain.ts";
 import { LiveCall } from "../src/call.ts";
 import { SCENARIOS, type Scenario } from "../src/scenarios.ts";
 
@@ -28,10 +28,13 @@ function logger(t0: number, prefix: string) {
   };
 }
 
-async function run(sc: Scenario, verbose: boolean): Promise<CallReview> {
+async function run(sc: Scenario, verbose: boolean): Promise<{ review: CallReview; actions: FollowUpAction[] }> {
   const call = new LiveCall(`${sc.id}-replay`, { from: sc.from, inContacts: sc.inContacts }, sc.expected);
   if (verbose) call.subscribe(logger(Date.now(), ""));
   const review = new Promise<CallReview>((resolve) => call.subscribe((m) => m.type === "call.review" && resolve(m.review), false));
+  const actions = new Promise<FollowUpAction[]>((resolve) =>
+    call.subscribe((m) => m.type === "followup.proposed" && resolve(m.actions), false),
+  );
   call.brain.addTurn("alex", "Hello?");
   for (const line of sc.script) {
     call.caller(line);
@@ -39,25 +42,28 @@ async function run(sc: Scenario, verbose: boolean): Promise<CallReview> {
   }
   await new Promise((r) => setTimeout(r, tail)); // let the slower lanes finish
   call.end("script finished");
-  return review;
+  return { review: await review, actions: await actions };
 }
 
-function printReview(sc: Scenario, r: CallReview) {
+function printReview(sc: Scenario, r: CallReview, actions: FollowUpAction[]) {
   console.log(`\n=== ${sc.title} (${sc.kind}) → ${r.finalLevel}${r.locked ? " LOCKED" : ""}, verdict ${r.verdict}`);
   console.log(`  ${r.summary}`);
   r.followUps.forEach((f) => console.log(`  follow-up: ${f.action} (${f.why})`));
   r.evals.forEach((e) => console.log(`  ${e.pass ? "PASS" : "FAIL"} ${e.name}: ${e.detail}`));
   console.log(`  latency: ${Object.entries(r.latency).map(([l, v]) => `${l} ${v!.medianMs}ms×${v!.runs}${v!.failures ? ` (${v!.failures} failed)` : ""}`).join(", ")}`);
+  console.log(`  followup.proposed (${actions.length}):`);
+  actions.forEach((a) => console.log(`    [${a.id}] (${a.kind}) ${a.title} — ${a.details}`));
 }
 
 if (id === "all") {
   const results = await Promise.all(SCENARIOS.map(async (sc) => [sc, await run(sc, false)] as const));
-  results.forEach(([sc, r]) => printReview(sc, r));
-  const evals = results.flatMap(([, r]) => r.evals);
+  results.forEach(([sc, { review, actions }]) => printReview(sc, review, actions));
+  const evals = results.flatMap(([, { review }]) => review.evals);
   console.log(`\nTOTAL ${evals.filter((e) => e.pass).length}/${evals.length} evals pass across ${results.length} calls`);
 } else {
   const sc = SCENARIOS.find((s) => s.id === id);
   if (!sc) throw new Error(`unknown scenario ${id}; try all, ${SCENARIOS.map((s) => s.id).join(", ")}`);
-  printReview(sc, await run(sc, true));
+  const { review, actions } = await run(sc, true);
+  printReview(sc, review, actions);
 }
 process.exit(0);

@@ -70,6 +70,16 @@ export interface CallReview {
   latency: Partial<Record<Lane, { runs: number; medianMs: number; failures: number }>>;
 }
 
+export type FollowUpKind = "draft_text_message" | "draft_report" | "block_number" | "set_reminder";
+export type FollowUpReportTarget = "bank" | "ftc" | "police" | "other";
+
+/** Concrete follow-up action proposed by the follow-up agent. Nothing executes until Alex approves. */
+export type FollowUpAction =
+  | { id: string; kind: "draft_text_message"; title: string; details: string; payload: { to: string; body: string } }
+  | { id: string; kind: "draft_report"; title: string; details: string; payload: { to: FollowUpReportTarget; body: string } }
+  | { id: string; kind: "block_number"; title: string; details: string; payload: { number: string } }
+  | { id: string; kind: "set_reminder"; title: string; details: string; payload: { text: string; when: string } };
+
 /** Desk (test harness) or phone app → server. The app joins a live phone call by callId ("latest" = newest). */
 export type DeskClientMsg =
   | { type: "join"; role: "desk"; callId: string }
@@ -81,7 +91,9 @@ export type DeskClientMsg =
   | { type: "control.delegate"; actionId: string; revision: number }
   | { type: "control.takeback"; actionId: string; revision: number; localSilenceMs: number; cutTurnId?: string }
   | { type: "direction.pick"; actionId: string; revision: number; directionId: string }
-  | { type: "call.end"; actionId: string; revision: number };
+  | { type: "call.end"; actionId: string; revision: number }
+  | { type: "followup.approve"; actionId: string; followupId: string }
+  | { type: "followup.dismiss"; followupId: string };
 
 /** Server → desk */
 export type DeskServerMsg =
@@ -92,6 +104,8 @@ export type DeskServerMsg =
   | { type: "turn.final"; turn: Turn }
   | { type: "caption.interim"; speaker: Speaker; text: string } // live words before the line is final
   | { type: "call.review"; review: CallReview }
+  | { type: "followup.proposed"; actions: FollowUpAction[] }
+  | { type: "followup.result"; followupId: string; ok: boolean; detail: string }
   | { type: "agent.say"; turnId: string; text: string; revision: number; directionId: string | null }
   | { type: "agent.cut"; turnId: string }
   | { type: "risk.signal"; sign: Sign }

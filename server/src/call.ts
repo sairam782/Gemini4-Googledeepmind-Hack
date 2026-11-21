@@ -1,12 +1,13 @@
-import type { CallReview, DeskClientMsg, DeskServerMsg, Floor, Lane, Level, Speaker } from "../../shared/brain.ts";
+import type { CallReview, DeskClientMsg, DeskServerMsg, Floor, FollowUpAction, Lane, Level, Speaker } from "../../shared/brain.ts";
 import { CallBrain } from "./brain/orchestrator.ts";
 import { INTRO, STOCK, guardSay } from "./brain/catalog.ts";
 import { renderSpeech, ttsEnabled } from "./tts.ts";
 import { reviewCall } from "./brain/review.ts";
+import { executeFollowUp, proposeFollowUps } from "./brain/followup.ts";
 import type { CallContext } from "./brain/lanes.ts";
 import { saveCall } from "./store.ts";
 
-type ControlMsg = Extract<DeskClientMsg, { actionId: string }>;
+type ControlMsg = Extract<DeskClientMsg, { actionId: string; revision: number }>;
 type Listener = (m: DeskServerMsg) => void;
 
 /** Where the agent's voice goes: the desk's speakers, or the phone line (Twilio). */
@@ -40,13 +41,15 @@ export class LiveCall {
   private history: DeskServerMsg[] = [];
   private lanes: { lane: Lane; turnId: string; ms: number; ok: boolean; note?: string }[] = [];
   private guardBlocks = 0;
+  private followUpState = new Map<string, "pending" | "approved" | "dismissed">();
   review: CallReview | null = null;
+  followUps: FollowUpAction[] = [];
   voice: AgentVoice | null = null;
   lineInfo: () => { nextLine: number; totalLines: number } = () => ({ nextLine: 0, totalLines: 0 });
 
   constructor(
     readonly id: string,
-    ctx: CallContext,
+    private ctx: CallContext,
     private expected?: { level: Level; verdict: string },
   ) {
     this.from = ctx.from;
@@ -195,6 +198,49 @@ export class LiveCall {
     this.emit({ type: "action.accepted", actionId, revision: this.revision });
   }
 
+  // ---------------------------------------------------------------- post-call follow-ups
+
+  approveFollowUp(actionId: string, followupId: string) {
+    if (this.consumed.has(actionId)) {
+      this.emit({ type: "action.rejected", actionId, revision: this.revision, reason: "duplicate" });
+      this.emit({ type: "followup.result", followupId, ok: false, detail: "duplicate action" });
+      return;
+    }
+    const action = this.followUps.find((a) => a.id === followupId);
+    const state = this.followUpState.get(followupId);
+    if (!action || !state) {
+      this.emit({ type: "action.rejected", actionId, revision: this.revision, reason: "unknown follow-up" });
+      this.emit({ type: "followup.result", followupId, ok: false, detail: "unknown follow-up" });
+      return;
+    }
+    if (state !== "pending") {
+      const detail = state === "approved" ? "already executed" : "already dismissed";
+      this.emit({ type: "action.rejected", actionId, revision: this.revision, reason: detail });
+      this.emit({ type: "followup.result", followupId, ok: false, detail });
+      return;
+    }
+    this.consumed.add(actionId);
+    this.followUpState.set(followupId, "approved");
+    this.accept(actionId);
+    const res = executeFollowUp(action);
+    this.emit({ type: "followup.result", followupId, ok: res.ok, detail: res.detail });
+  }
+
+  dismissFollowUp(followupId: string) {
+    const state = this.followUpState.get(followupId);
+    if (!state) {
+      this.emit({ type: "followup.result", followupId, ok: false, detail: "unknown follow-up" });
+      return;
+    }
+    if (state !== "pending") {
+      const detail = state === "approved" ? "already executed" : "already dismissed";
+      this.emit({ type: "followup.result", followupId, ok: false, detail });
+      return;
+    }
+    this.followUpState.set(followupId, "dismissed");
+    this.emit({ type: "followup.result", followupId, ok: true, detail: "dismissed" });
+  }
+
   // ---------------------------------------------------------------- hang-up and review
 
   end(reason: string) {
@@ -217,6 +263,17 @@ export class LiveCall {
     saveCall({ callId: this.id, from: this.from, startedAt: this.startedAt, endedAt: this.endedAt ?? Date.now(), review });
     this.emit({ type: "lane.result", lane: "review", model: review.model, turnId: snap.turns.at(-1)!.turnId, ms: review.ms, ok: !review.summary.startsWith("Review model failed"), note: `${review.verdict}; ${review.evals.filter((e) => e.pass).length}/${review.evals.length} evals pass` });
     this.emit({ type: "call.review", review });
+    const actions = await proposeFollowUps({
+      callId: this.id,
+      from: this.ctx.from,
+      inContacts: this.ctx.inContacts,
+      review,
+      turns: snap.turns,
+      notes: snap.notes,
+    });
+    this.followUps = actions;
+    actions.forEach((a) => this.followUpState.set(a.id, "pending"));
+    this.emit({ type: "followup.proposed", actions });
     setTimeout(() => calls.delete(this.id), 30 * 60_000); // keep reviews readable for a while
   }
 }

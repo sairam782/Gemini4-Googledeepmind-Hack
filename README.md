@@ -20,7 +20,7 @@ Each finished caller line is sent to every lane at once. The app merges the resu
 | Alex's panel | app | `/desk` today, phone app next | – | Notes, signs, 3 directions, take over / take back. |
 | Pre-render speech | tts | `gemini-3.8-flash-tts` (`TTS_MODEL`) | cached | Every suggested line is rendered as it arrives, so a tap starts speaking in ~10 ms. |
 | Call review | review | `gemini-4-carbon` (`REVIEW_MODEL`) | ~5 s after hang-up | Summary, verdict, follow-up drafts. Evals are computed in code. |
-| Follow-up agent | – | Gemini Managed Agents | **not built** | Today Carbon drafts the follow-ups. Acting on them (with Alex's approval) is the next step. |
+| Follow-up agent | followup | `gemini-4-neon` (`FOLLOWUP_MODEL`) | ~3–6 s after review | `@google/genai` function calling turns review suggestions into up to 4 guarded action proposals Alex approves one by one. |
 
 How the directions board fills in on each caller line:
 
@@ -42,6 +42,14 @@ Lanes that are slower than one caller line run one at a time, and a newer line q
 - **Lock:** "High risk: confirmed" needs a supervisor-confirmed High score, a failed family check or refused callback, and a money or code request. Once locked, it stays locked.
 - **Guard on everything the agent says:** no codes or 4–8 digit numbers, no approvals or payment promises, no notes, scores or "scam" talk, no speaking as Alex or family, never ends the call.
 - **Floor:** every tap carries an action ID and a revision. Duplicates and stale taps are rejected. Take back and End always work. One question at a time.
+
+### Follow-up agent
+
+After hang-up and Carbon's review, `server/src/brain/followup.ts` (`proposeFollowUps`, `FOLLOWUP_MODEL`, default `gemini-4-neon`) turns the review's suggested next steps into up to 4 concrete proposals using **`@google/genai` function calling** (`generateContent` with `functionDeclarations`). We chose `@google/genai` function calling rather than Gemini Managed Agents (the Interactions API / `antigravity-preview-09-2026` remote Linux sandbox), which requires `@google/genai` v2.3+ and is designed for autonomous remote sandbox execution rather than low-latency, locally guarded human-in-the-loop proposals.
+
+- **Proposal-only tools:** `draft_text_message` (to a saved contact), `draft_report` (`bank` | `ftc` | `police` | `other`), `block_number`, and `set_reminder`. There are no tools to send money, share codes, or call a scammer back.
+- **Guard:** every draft body and reminder text is checked for 4–8 digit codes, payment promises, and callbacks to a scammer's number; failures are dropped before reaching Alex.
+- **Approval required:** `followup.proposed` lists the actions; nothing executes until Alex sends `followup.approve` (or `followup.dismiss`) over the socket, even after the call has ended. Each `followupId` runs at most once: `block_number` adds the number to the in-memory blocklist (`server/src/blocklist.ts`), `set_reminder` saves it in memory, and `draft_*` returns the final text as ready to send.
 
 ## Run it
 
@@ -106,11 +114,13 @@ Connect to `ws(s)://<host>/ws` and send `{ "type": "join", "role": "app", "callI
 - `agent.say`, `agent.cut`
 - `state`, `lane.result`
 - `call.ended`, `call.review`
+- `followup.proposed`, `followup.result`
 
-**App → server.** Every tap carries `actionId` and `revision`.
+**App → server.** Live-call taps carry `actionId` and `revision`; follow-up approvals work after hang-up.
 - `control.delegate`, `control.takeback`
 - `direction.pick`, `call.end`
 - `desk.say` with speaker `alex`, to type a line
+- `followup.approve`, `followup.dismiss`
 
 **HTTP**
 - `GET /api/health`
@@ -123,12 +133,14 @@ Connect to `ws(s)://<host>/ws` and send `{ "type": "join", "role": "app", "callI
 
 ```
 shared/brain.ts               event contract (desk, phone app, server)
-server/src/call.ts            LiveCall: brain + floor, revision, one-shot taps, agent voice, review on hang-up
+server/src/call.ts            LiveCall: brain + floor, revision, one-shot taps, agent voice, review + follow-ups on hang-up
 server/src/brain/orchestrator.ts  fan-out, merge, stale/answered handling, risk scoring
 server/src/brain/lanes.ts     risk, notes, planner/flash, supervisor prompts + output validation
 server/src/brain/review.ts    Carbon summary/verdict/follow-ups + code evals
+server/src/brain/followup.ts  Neon function-calling follow-up agent + approval executors
 server/src/brain/catalog.ts   sign weights, lock rule, stock directions, guard
 server/src/brain/rules.ts     regex fast lane
+server/src/blocklist.ts       in-memory blocklist populated after Alex approves block_number
 server/src/transcribe.ts      Gemini 3.5 Transcribe (Live) per track
 server/src/twilio.ts          Twilio Media Streams bridge + TwiML
 server/src/twilioAuth.ts      Twilio webhook HMAC-SHA1 and stream HMAC-SHA256 verification
