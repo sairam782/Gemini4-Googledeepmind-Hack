@@ -25,6 +25,7 @@ export interface AgentVoice {
  * wait up to AUTO_WAIT_MS more for one before falling back to a stock card. AUTO_SPEAK_MS=0 turns it off.
  */
 const AUTO_SPEAK_MS = Number(process.env.AUTO_SPEAK_MS ?? 4000);
+const CALLER_QUIET_MS = 1000; // the caller must be quiet this long before the agent speaks on its own
 const AUTO_WAIT_MS = 4000; // a generic stock line mid-call sounds off, so wait a bit longer for a tailored one
 
 export const calls = new Map<string, LiveCall>();
@@ -51,6 +52,9 @@ export class LiveCall {
   /** Desk live mode: caller text arrives before its audio is played, so the auto clock starts at callerAudioDone. */
   waitForCallerAudio = false;
   private lastAgentEnd = 0;
+  /** Mic mode: true while a caller sentence is held waiting for its next piece; the agent waits for it. */
+  callerPending: () => boolean = () => false;
+  private lastCallerSound = 0; // last time the caller made sound (mic level or a caption)
   private introduced = false;
   private consumed = new Set<string>();
   private listeners = new Set<Listener>();
@@ -126,6 +130,7 @@ export class LiveCall {
 
   interim(speaker: Speaker, text: string) {
     this.emit({ type: "caption.interim", speaker, text });
+    if (speaker === "caller") this.callerSound();
     // Barge-in: the caller talks over the agent. Stop the agent so it doesn't talk across them;
     // the floor stays with the agent and Alex picks the next line as usual.
     // Only audio that is actually playing can be talked over; a line still rendering is left alone.
@@ -181,7 +186,7 @@ export class LiveCall {
       this.accept(m.actionId);
       if (!this.introduced) {
         this.introduced = true;
-        this.agentSay(INTRO, null);
+        this.sayIntro();
       }
       this.brain.reissue();
       if (this.brain.lastCallerTurnId()) this.scheduleAuto();
@@ -190,7 +195,7 @@ export class LiveCall {
       this.accept(m.actionId);
     } else if (m.type === "direction.pick") {
       if (this.floor !== "agent") return reject("not delegated: tap Agent take over first");
-      if (this.speaking) return reject("busy: the agent is still speaking");
+      if (this.speaking || this.introPending) return reject("busy: the agent is still speaking");
       const d = this.brain.findDirection(m.directionId);
       if (!d) return reject("stale");
       this.cancelAuto();
@@ -204,6 +209,23 @@ export class LiveCall {
       return;
     }
     this.state();
+  }
+
+  /** The caller is making sound right now (mic level or a live caption). */
+  callerSound() {
+    this.lastCallerSound = Date.now();
+  }
+
+  private introPending = false;
+  /** The take-over intro also waits for the caller to finish their sentence. */
+  private sayIntro(tries = 0) {
+    if (this.ended || this.floor !== "agent") return void (this.introPending = false);
+    if (tries < 30 && (this.callerPending() || Date.now() - this.lastCallerSound < CALLER_QUIET_MS)) {
+      this.introPending = true; // up to ~6 s, then speak anyway
+      return void setTimeout(() => this.sayIntro(tries + 1), 200);
+    }
+    this.introPending = false;
+    this.agentSay(INTRO, null);
   }
 
   private takeBack(cutTurnId?: string) {
@@ -246,6 +268,10 @@ export class LiveCall {
     if (this.ended || this.floor !== "agent" || this.brain.lastCallerTurnId() !== forTurn) return;
     const retry = () => (this.autoTimer = setTimeout(() => this.fireAuto(forTurn, hardStop), 250));
     // Let the agent finish its current line, and give Flash-Lite a moment if only stock cards are up.
+    // Never start over the caller: if they're still talking (a pause mid-sentence), wait until they stop.
+    // (A noisy room can look like talking forever, so the level stops counting a couple of seconds past hardStop.)
+    const talking = Date.now() - this.lastCallerSound < CALLER_QUIET_MS && Date.now() < hardStop + 2000;
+    if (this.introPending || this.callerPending() || talking) return retry();
     if (this.speaking || (!this.brain.hasTailoredBoard() && Date.now() < hardStop)) return retry();
     const d = this.brain.bestDirection();
     if (!d) return Date.now() < hardStop + 3000 ? retry() : undefined;

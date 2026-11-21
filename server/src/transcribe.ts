@@ -45,7 +45,7 @@ export class Transcriber {
           realtimeInputConfig: {
             automaticActivityDetection: {
               endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH,
-              silenceDurationMs: Number(process.env.STT_SILENCE_MS ?? 400),
+              silenceDurationMs: Number(process.env.STT_SILENCE_MS ?? 500),
             },
           },
         },

@@ -76,8 +76,23 @@ export class DeskSession {
   }
 
   /** Mic mode: PCM frames from the browser go to Gemini Live transcription, as on a phone line. */
+  private voiceAt = 0; // last time the mic level said the caller was talking
+
   audio(pcm16k: Buffer) {
-    if (this.mic && this.call && !this.call.ended && pcm16k.length && pcm16k.length < 64_000) this.mic.push(pcm16k);
+    if (!(this.mic && this.call && !this.call.ended && pcm16k.length && pcm16k.length < 64_000)) return;
+    this.mic.push(pcm16k);
+    // Voice activity from the raw level: captions lag ~1 s, the audio doesn't. While the agent is audible
+    // the level may be its own echo, so only count it when the agent is quiet.
+    let sum = 0;
+    const n = pcm16k.length >> 1;
+    for (let i = 0; i < n; i++) {
+      const v = pcm16k.readInt16LE(i * 2);
+      sum += v * v;
+    }
+    if (Math.sqrt(sum / n) > VOICE_RMS && !this.call.agentAudible(300)) {
+      this.voiceAt = Date.now();
+      this.call.callerSound();
+    }
   }
 
   private start(id: string, mode: "live" | "script" | "mic") {
@@ -99,7 +114,7 @@ export class DeskSession {
     if (mode === "mic") {
       const c = call;
       // Speech-to-text already adds ~1 s after you stop talking, so the agent answers ~1 s after the line lands.
-      c.autoSpeakMs = Number(process.env.MIC_AUTO_SPEAK_MS ?? 1000);
+      c.autoSpeakMs = Number(process.env.MIC_AUTO_SPEAK_MS ?? 300);
       // Speakers instead of headphones: the agent's own voice can leak into the mic. Drop caller text that
       // mostly repeats what the agent just said while it is (or was just) audible.
       // Keep the last few agent lines: a delayed transcript of the intro can arrive after the next line started.
@@ -112,10 +127,39 @@ export class DeskSession {
         interimWasEcho = final ? false : isEcho;
         return isEcho;
       };
+      // A short pause can split one sentence into two finals. Hold each final briefly and join it with
+      // the next piece if the caller keeps talking, so the brain sees whole sentences.
+      const MERGE_MS = Number(process.env.MIC_MERGE_MS ?? 300);
+      let pending = "";
+      let flushT: ReturnType<typeof setTimeout> | null = null;
+      c.callerPending = () => pending !== "";
+      const join = (a: string, b: string) => (a ? `${a} ${b}` : b).replace(/([.?!,])(?=[A-Za-z])/g, "$1 ");
+      let heldSince = 0;
+      const flush = () => {
+        flushT = null;
+        // Still talking after a hesitation: keep holding so the next piece joins this sentence (max ~4 s).
+        if (Date.now() - this.voiceAt < 500 && Date.now() - heldSince < 4000) return hold(200);
+        const t = pending;
+        pending = "";
+        if (t && !c.ended) c.caller(t);
+      };
+      const hold = (ms: number) => {
+        if (flushT) clearTimeout(flushT);
+        flushT = setTimeout(flush, ms);
+      };
       this.mic = new Transcriber(
         {
-          interim: (t) => !echo(t, false) && c.interim("caller", t),
-          final: (t) => !echo(t, true) && c.caller(t),
+          interim: (t) => {
+            if (echo(t, false)) return;
+            if (pending) hold(3000); // still the same sentence; its final will arrive and flush it
+            c.interim("caller", join(pending, t));
+          },
+          final: (t) => {
+            if (echo(t, true)) return;
+            if (!pending) heldSince = Date.now();
+            pending = join(pending, t);
+            hold(MERGE_MS);
+          },
           error: (message) => c.emit({ type: "error", message }),
         },
         "caller",
@@ -125,7 +169,10 @@ export class DeskSession {
           recent.push({ text: m.text, at: Date.now() });
           if (recent.length > 3) recent.shift();
         }
-        if (m.type === "call.ended") this.mic?.close();
+        if (m.type === "call.ended") {
+          if (flushT) clearTimeout(flushT);
+          this.mic?.close();
+        }
       }, false);
     }
     if (mode === "live") {
@@ -144,6 +191,8 @@ export class DeskSession {
     call.state();
   }
 }
+
+const VOICE_RMS = Number(process.env.MIC_VOICE_RMS ?? 900); // Int16 level that counts as talking (~-31 dBFS)
 
 const wordsOf = (t: string) => t.toLowerCase().replace(/[^a-z0-9' ]/g, " ").split(/\s+/).filter((w) => w.length > 2);
 /**
