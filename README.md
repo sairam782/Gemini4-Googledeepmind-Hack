@@ -83,6 +83,17 @@ Latest `replay.ts all` run: **56/56 evals pass**.
    - **Take back:** sends `clear`, which stops playback at once.
 4. Alex's app joins the live call over WebSocket.
 
+### Twilio security
+
+Set `TWILIO_AUTH_TOKEN` to enforce request verification:
+- `POST /twilio/voice` verifies `X-Twilio-Signature` (`HMAC-SHA1` over `https://<PUBLIC_HOST|Host><req.url>` + sorted POST params) and returns `403` on mismatch.
+- The returned TwiML embeds `<Parameter name="sig"/>` (`HMAC-SHA256` of `CallSid`), which `/twilio` verifies on the stream `start` event before creating a `LiveCall`.
+- If `TWILIO_AUTH_TOKEN` is unset, requests are allowed for local testing and the server logs `Twilio signature check OFF` at startup. Run `cd server && npx tsx scripts/check-twilio-auth.ts` to self-test against Twilio's worked example.
+
+### Call history
+
+Completed call reviews are saved as JSON to `server/data/calls/<callId>.json` (override the base dir with `DATA_DIR`; set `SAVE_CALLS=0` to disable, as `scripts/replay.ts` does). `GET /api/calls` returns live and saved calls newest-first, and `GET /api/calls/<id>/review` falls back to disk after a call leaves memory.
+
 ## API for the phone app
 
 Connect to `ws(s)://<host>/ws` and send `{ "type": "join", "role": "app", "callId": "<CallSid>" | "latest" }`. Every event since the call started is replayed, then events stream live. The message types are in `shared/brain.ts`.
@@ -105,7 +116,8 @@ Connect to `ws(s)://<host>/ws` and send `{ "type": "join", "role": "app", "callI
 - `GET /api/health`
 - `POST /api/tts` with `{text, voice}`, returns WAV
 - `POST /twilio/voice` (TwiML)
-- `GET /api/calls/<id>/review`
+- `GET /api/calls` (live + saved calls, newest first)
+- `GET /api/calls/<id>/review` (live or saved)
 
 ## Layout
 
@@ -119,6 +131,8 @@ server/src/brain/catalog.ts   sign weights, lock rule, stock directions, guard
 server/src/brain/rules.ts     regex fast lane
 server/src/transcribe.ts      Gemini 3.5 Transcribe (Live) per track
 server/src/twilio.ts          Twilio Media Streams bridge + TwiML
+server/src/twilioAuth.ts      Twilio webhook HMAC-SHA1 and stream HMAC-SHA256 verification
+server/src/store.ts           JSON call history persistence and listing
 server/src/audio.ts           WAV, resampling, µ-law
 server/src/scenarios.ts       8 scripted calls (4 scam, 4 legitimate/everyday)
 server/src/desk.ts            desk/app socket sessions

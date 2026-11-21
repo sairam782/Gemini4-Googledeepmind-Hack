@@ -5,6 +5,8 @@ import type { CallReview, DeskServerMsg } from "../../shared/brain.ts";
 import { LiveCall } from "../src/call.ts";
 import { SCENARIOS, type Scenario } from "../src/scenarios.ts";
 
+process.env.SAVE_CALLS = "0";
+
 const id = process.argv[2] ?? "maya";
 const gap = Number(process.argv[3] ?? 6000);
 const tail = Number(process.env.TAIL_MS ?? 20000);

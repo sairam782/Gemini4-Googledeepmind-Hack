@@ -3,6 +3,7 @@ import { LiveCall, type AgentVoice } from "./call.ts";
 import { Transcriber } from "./transcribe.ts";
 import { renderSpeech, ttsEnabled } from "./tts.ts";
 import { decodeMulaw, encodeMulaw, parseWav, pcmBytes, resample } from "./audio.ts";
+import { verifyStreamSig } from "./twilioAuth.ts";
 
 /**
  * Twilio Media Streams bridge (wss://<host>/twilio).
@@ -83,6 +84,12 @@ export function handleTwilioStream(ws: WebSocket) {
         const s = m.start!;
         streamSid = s.streamSid;
         const p = s.customParameters ?? {};
+        const authToken = process.env.TWILIO_AUTH_TOKEN;
+        if (authToken && !verifyStreamSig(authToken, s.callSid, p.sig)) {
+          console.warn(`[twilio] rejected stream ${streamSid || "(unknown)"}: invalid signature`);
+          ws.close(1008, "invalid signature");
+          return;
+        }
         const from = p.from || "unknown number";
         const inContacts = p.inContacts ? p.inContacts === "true" : contacts.has(from.replace(/[^\d+]/g, ""));
         call = new LiveCall(s.callSid || streamSid, { from, inContacts });
@@ -117,13 +124,14 @@ export function handleTwilioStream(ws: WebSocket) {
 }
 
 /** TwiML for the Twilio number's voice webhook: stream the call to us, bidirectionally. */
-export function twiml(host: string, from: string) {
+export function twiml(host: string, from: string, sig?: string) {
   const esc = (s: string) => s.replace(/[<>&"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const sigParam = sig ? `\n      <Parameter name="sig" value="${esc(sig)}"/>` : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
     <Stream url="wss://${esc(host)}/twilio">
-      <Parameter name="from" value="${esc(from)}"/>
+      <Parameter name="from" value="${esc(from)}"/>${sigParam}
     </Stream>
   </Connect>
 </Response>`;
