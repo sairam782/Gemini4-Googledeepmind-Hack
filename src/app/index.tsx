@@ -27,7 +27,7 @@ export default function LiveCallScreen() {
 }
 
 const CONNECTION_TEXT: Record<ConnectionStatus, { ok: boolean | null; text: string }> = {
-  'not-set-up': { ok: null, text: 'Not connected. Add your number and server in Setup.' },
+  'not-set-up': { ok: null, text: 'Not connected. Set up the server in Setup.' },
   connecting: { ok: null, text: 'Connecting to the agent…' },
   online: { ok: true, text: 'Agent is ready to screen calls' },
   offline: { ok: false, text: 'Agent offline. Retrying…' },

@@ -91,6 +91,9 @@ export function applyEvent(e: ServerEvent, demo = false) {
       callStore.set({ ...current, signals: [...current.signals, { label: e.label, turn: e.turn }] });
       return;
     }
+    case 'signal.removed':
+      callStore.set({ ...current, signals: current.signals.filter((s) => s.label !== e.label) });
+      return;
     case 'verdict':
       callStore.set({ ...current, verdict: e.verdict, reasons: e.reasons });
       return;

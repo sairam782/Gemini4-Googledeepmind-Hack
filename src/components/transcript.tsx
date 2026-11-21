@@ -9,7 +9,7 @@ export function Bubble({ turn, text }: { turn: Turn; text: string }) {
   const isAgent = turn.speaker === 'agent';
   return (
     <View style={[styles.row, isAgent ? styles.right : styles.left]}>
-      <Text style={[styles.who, { color: theme.textSecondary }]}>{isAgent ? 'Agent' : 'Caller'}</Text>
+      <Text style={[styles.who, { color: theme.textSecondary }]}>{isAgent ? 'Agent' : turn.speaker === 'you' ? 'You' : 'Caller'}</Text>
       <View
         style={[
           styles.bubble,

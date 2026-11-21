@@ -16,7 +16,7 @@ Unknown caller ──► Alex's phone declines it (Android) / silences it (iPhon
 | `server/` | **Agent server** (TypeScript): Twilio bridge, Gemini transcription, the multi-model brain, call review | `cd server && npm install && npm run dev` |
 | `web/` | **Brain test desk** (Vite + React) for the server | `cd web && npm install && npm run dev` |
 | `shared/` | Event contract shared by `server/` and `web/` (`shared/brain.ts`) | – |
-| `twilio-server/` | Earlier plain-JS Twilio starter server, kept for reference | `cd twilio-server && npm install && npm start` |
+| `twilio-server/` | **Phone app's server**: answers forwarded calls on the Twilio number and talks to the phone app over `/app` | `cd twilio-server && npm install && npm start` |
 
 Each folder installs on its own. The root `package.json` belongs to the phone app, so there is no npm workspace; `web/` uses React 18 and the app uses React 19, and they must not share `node_modules`. From the root, `npm run dev:agent` starts `server/` and `web/` together (install both first).
 
@@ -26,9 +26,9 @@ Each folder installs on its own. The root `package.json` belongs to the phone ap
 | --- | --- |
 | Phone app | Built: Live call, History and Setup screens, demo calls, Android call check, forwarding codes, push handling. |
 | Agent server + brain | Built in `server/`: 56/56 evals pass on the 8 scripted calls (see below). |
-| **App ↔ server** | **Not connected yet.** The app expects the contract in [Phone app: server contract](#phone-app-server-contract) (`/app` socket, `/api/calls/...` routes). The server speaks the protocol in [API for the phone app](#api-for-the-phone-app) (`/ws` socket, `shared/brain.ts` events). One side has to adopt the other's. |
+| **Two paths, on purpose** | The **phone app** talks to `twilio-server/` using the [phone app contract](#phone-app-server-contract) (`/app` socket, `/api/...` routes). The **web test desk** talks to `server/` over `/ws` with `shared/brain.ts` events. Both stay; testing goes through the phone app. |
 
-Until the two are connected, the phone app's demo calls are the only way to see the Live call screen.
+Until `twilio-server/` is running and set in the app's Setup screen, the phone app's demo calls are the only way to see the Live call screen.
 
 ---
 
@@ -187,9 +187,22 @@ The Twilio Account SID and Auth Token stay on the server. Never put them in the 
 
 Push notifications need an EAS project. Run `npx eas-cli@latest init` once, then rebuild.
 
+## Switch: phone calls or web simulation
+
+Setup → **Agent server** has a switch:
+
+| Setting | App listens to | Calls come from | Join · End · Block |
+| --- | --- | --- | --- |
+| **Phone calls** (default) | `twilio-server/` at the server address, over `/app` | Real calls forwarded to the Twilio number | Join rings your phone; End and Block go to the server |
+| **Web simulation** | Abhi's `server/` (default `http://localhost:8787`), over `/ws` | Calls started on the web test desk (`https://localhost:5173/desk`) | Join takes the call back from the agent; End hangs up; Block is saved on the phone only |
+
+To test with the simulation: run `npm run dev:agent`, set the switch to **Web simulation**, and start a scenario on the desk. The call shows up on the Live call tab within about 2 seconds. On a real phone, use your computer's network address instead of `localhost`. The adapter is [`src/lib/simulation.ts`](src/lib/simulation.ts); it turns the server's `shared/brain.ts` events into the app's events, so both modes use the same screens.
+
+To change the default without tapping, set `EXPO_PUBLIC_BACKEND=web` (and optionally `EXPO_PUBLIC_SIM_SERVER_URL`) in `.env.local`. A choice saved in Setup wins.
+
 ## Phone app: server contract
 
-This is what the app currently expects. It does **not** match the agent server's [`/ws` API](#api-for-the-phone-app) yet.
+This is what the app expects from `twilio-server/`. It is separate from the agent server's [`/ws` API](#api-for-the-phone-app), which is for the web desk.
 
 ### WebSocket: server → app
 
@@ -266,7 +279,7 @@ iOS doesn't let apps decide per call. Go to **Settings → Apps → Phone → Sc
 
 ## Later
 
-- [ ] **Connect the phone app to the agent server.** Pick one protocol (the app's `/app` contract or the server's `/ws` + `shared/brain.ts`) and change the other side.
+- [ ] **Finish `twilio-server/` for the phone app.** Serve every route in the [phone app contract](#phone-app-server-contract) and plug in Gemini.
 - [ ] **Bring back family safe words.** Set `FEATURES.safeWords` to `true` in [`src/constants/features.ts`](src/constants/features.ts). The Setup section, secure storage, upload (`/api/safe-words`) and on-screen masking are already built. The server then needs to store them and give them to the agent, which asks callers who claim to be family. They are stored in the phone's secure storage, sent only over HTTPS, and replaced with `•••` if they appear in a transcript or verdict.
 
 ## Phone app layout

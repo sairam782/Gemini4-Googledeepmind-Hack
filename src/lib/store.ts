@@ -40,14 +40,25 @@ export function useStore<T>(store: Store<T>): T {
 
 export type Carrier = 'verizon' | 'att_tmobile';
 
+/**
+ * Which server the app listens to:
+ *  - 'phone': the phone server (twilio-server/), real forwarded calls, the app's own /app protocol.
+ *  - 'web':   Abhi's agent server (server/), calls started from the web test desk, its /ws protocol.
+ */
+export type Backend = 'phone' | 'web';
+
 export type Settings = {
   /** The user's real phone. The server rings it when they tap Join. */
   myPhone: string;
   /** The Twilio number calls are forwarded to. Not a secret. */
   agentNumber: string;
   carrier: Carrier;
-  /** Abhi's server, e.g. https://uno-revoice.example.com */
+  /** Phone server (twilio-server/), e.g. https://uno-revoice.example.com */
   serverUrl: string;
+  /** Which server the app listens to. See Backend. */
+  backend: Backend;
+  /** Abhi's agent server for web simulation, e.g. http://localhost:8787 */
+  simServerUrl: string;
 };
 
 export type SafeWord = { id: string; name: string; word: string };
@@ -68,6 +79,8 @@ export const DEFAULT_SETTINGS: Settings = {
   agentNumber: process.env.EXPO_PUBLIC_AGENT_NUMBER ?? '',
   carrier: 'verizon',
   serverUrl: process.env.EXPO_PUBLIC_SERVER_URL ?? '',
+  backend: process.env.EXPO_PUBLIC_BACKEND === 'web' ? 'web' : 'phone',
+  simServerUrl: process.env.EXPO_PUBLIC_SIM_SERVER_URL ?? 'http://localhost:8787',
 };
 
 export const settingsStore = createStore<Settings>(DEFAULT_SETTINGS);

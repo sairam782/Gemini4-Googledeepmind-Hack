@@ -3,7 +3,8 @@
  * Every message is one JSON object with a `type` field naming the event.
  */
 
-export type Speaker = 'caller' | 'agent';
+/** 'you' only comes from the web simulation, where Alex (the user) also speaks on the call. */
+export type Speaker = 'caller' | 'agent' | 'you';
 export type Verdict = 'scam' | 'real' | 'unsure';
 
 export type CallStartedEvent = { type: 'call.started'; callId: string; from: string };
@@ -11,8 +12,16 @@ export type TranscriptEvent = { type: 'transcript'; callId: string; turn: number
 export type SignalEvent = { type: 'signal'; callId: string; label: string; turn: number };
 export type VerdictEvent = { type: 'verdict'; callId: string; verdict: Verdict; reasons: string[] };
 export type CallEndedEvent = { type: 'call.ended'; callId: string };
+/** A warning sign the agent took back (web simulation only). */
+export type SignalRemovedEvent = { type: 'signal.removed'; callId: string; label: string };
 
-export type ServerEvent = CallStartedEvent | TranscriptEvent | SignalEvent | VerdictEvent | CallEndedEvent;
+export type ServerEvent =
+  | CallStartedEvent
+  | TranscriptEvent
+  | SignalEvent
+  | SignalRemovedEvent
+  | VerdictEvent
+  | CallEndedEvent;
 
 const VERDICTS: readonly string[] = ['scam', 'real', 'unsure'];
 

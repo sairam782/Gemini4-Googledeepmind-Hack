@@ -30,6 +30,7 @@ import {
   safeWordsStore,
   settingsStore,
   useStore,
+  type Backend,
   type Carrier,
   type SafeWord,
 } from '@/lib/store';
@@ -332,9 +333,63 @@ function SafeWords() {
 
 // ---------------------------------------------------------------------------
 
+const BACKENDS: { id: Backend; label: string }[] = [
+  { id: 'phone', label: 'Phone calls' },
+  { id: 'web', label: 'Web simulation' },
+];
+
 function ServerSection() {
   const settings = useStore(settingsStore);
   const status = useStore(connectionStore);
+  const statusText = {
+    'not-set-up': 'Not connected',
+    connecting: 'Connecting…',
+    online: settings.backend === 'web' ? 'Connected to the simulation server' : 'Connected to the agent',
+    offline: 'Can’t reach the server. Retrying…',
+  }[status];
+
+  return (
+    <Section
+      title="Agent server"
+      hint="Phone calls: real calls forwarded to the Twilio number (twilio-server). Web simulation: calls you start on the web test desk (Abhi’s server).">
+      <Segmented<Backend>
+        options={BACKENDS}
+        value={settings.backend}
+        onChange={(backend) => void saveSettings({ ...settingsStore.get(), backend })}
+      />
+      {settings.backend === 'web' ? <SimServerFields /> : <PhoneServerFields />}
+      <StatusLine ok={status === 'online' ? true : status === 'offline' ? false : null}>{statusText}</StatusLine>
+    </Section>
+  );
+}
+
+function SimServerFields() {
+  const settings = useStore(settingsStore);
+  const [draft, setDraft] = useState(settings.simServerUrl);
+  return (
+    <>
+      <Field
+        label="Simulation server address"
+        value={draft}
+        onChangeText={setDraft}
+        onEndEditing={() =>
+          void saveSettings({ ...settingsStore.get(), simServerUrl: draft.trim().replace(/\/+$/, '') })
+        }
+        placeholder="http://localhost:8787"
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+      />
+      <T kind="muted">
+        Start a call on the test desk (https://localhost:5173/desk) and it shows up on the Live call tab. On a real
+        phone, use your computer’s network address instead of localhost. Join takes the call back from the agent.
+      </T>
+    </>
+  );
+}
+
+function PhoneServerFields() {
+  const settings = useStore(settingsStore);
   const [draft, setDraft] = useState(settings.serverUrl);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean | null; text: string } | null>(null);
@@ -368,15 +423,8 @@ function ServerSection() {
     }
   };
 
-  const statusText = {
-    'not-set-up': 'Not connected',
-    connecting: 'Connecting…',
-    online: 'Connected to the agent',
-    offline: 'Can’t reach the server. Retrying…',
-  }[status];
-
   return (
-    <Section title="Agent server" hint="The address of the server running the agent.">
+    <>
       <Field
         label="Server address"
         value={draft}
@@ -390,9 +438,8 @@ function ServerSection() {
         <T kind="muted">Not HTTPS: everything works except sending safe words.</T>
       ) : null}
       <BigButton title="Save and connect" busy={busy} disabled={!draft.trim()} onPress={connect} />
-      <StatusLine ok={status === 'online' ? true : status === 'offline' ? false : null}>{statusText}</StatusLine>
       {result ? <StatusLine ok={result.ok}>{result.text}</StatusLine> : null}
-    </Section>
+    </>
   );
 }
 
