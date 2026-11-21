@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ScrollViewInstance } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { BrandHeader } from '@/components/brand';
+import { BrandHeader, Logo, Wordmark } from '@/components/brand';
 import { Bubble, WarningSigns } from '@/components/transcript';
 import { BigButton, Card, StatusLine, T } from '@/components/ui';
 import { VerdictCard } from '@/components/verdict-card';
@@ -163,9 +163,15 @@ function ActiveCall({ call }: { call: LiveCall }) {
     <View style={styles.flex}>
       <View style={styles.header}>
         <View style={styles.headerRow}>
-          <T kind="label">{state}</T>
+          <View style={styles.brandRow}>
+            <Logo size={26} />
+            <Wordmark size={20} />
+          </View>
           <ModeBadge mode={call.demo ? 'demo' : isSimCall(call.callId) ? 'simulation' : 'live'} />
         </View>
+        <T kind="label" style={styles.state}>
+          {state}
+        </T>
         <T kind="hero" numberOfLines={1} adjustsFontSizeToFit>
           {formatNumber(call.from)}
         </T>
@@ -319,6 +325,8 @@ function SteerBox() {
 
 const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.sm },
+  brandRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  state: { marginTop: Spacing.sm },
   badge: { alignSelf: 'flex-start', borderWidth: 1.5, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   badgeText: { fontSize: 13, fontWeight: '800', letterSpacing: 1 },
   steer: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.sm },
@@ -334,7 +342,7 @@ const styles = StyleSheet.create({
   idle: { padding: Spacing.md, gap: Spacing.md },
   idleCard: { marginVertical: Spacing.sm, padding: Spacing.lg },
   header: { paddingHorizontal: Spacing.md, paddingTop: Spacing.sm },
-  top: { paddingHorizontal: Spacing.md, paddingTop: Spacing.sm, gap: Spacing.sm },
+  top: { paddingHorizontal: Spacing.md, paddingTop: Spacing.sm, paddingBottom: Spacing.xs, gap: Spacing.sm },
   transcript: { padding: Spacing.md, gap: Spacing.md },
   actions: { paddingHorizontal: Spacing.md, paddingTop: Spacing.sm },
   actionRow: { flexDirection: 'row', gap: Spacing.sm },
