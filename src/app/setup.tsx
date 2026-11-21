@@ -366,6 +366,7 @@ function ServerSection() {
 function SimServerFields() {
   const settings = useStore(settingsStore);
   const [draft, setDraft] = useState(settings.simServerUrl);
+  const [token, setToken] = useState(settings.simToken);
   return (
     <>
       <Field
@@ -380,9 +381,19 @@ function SimServerFields() {
         autoCorrect={false}
         keyboardType="url"
       />
+      <Field
+        label="App token (optional)"
+        value={token}
+        onChangeText={setToken}
+        onEndEditing={() => void saveSettings({ ...settingsStore.get(), simToken: token.trim() })}
+        placeholder="APP_TOKEN from the server's .env"
+        autoCapitalize="none"
+        autoCorrect={false}
+        secureTextEntry
+      />
       <T kind="muted">
         Start a call on the test desk (https://localhost:5173/desk) and it shows up on the Live call tab. On a real
-        phone, use your computer’s network address instead of localhost. Join takes the call back from the agent.
+        phone, use your computer’s network address instead of localhost, and the server’s APP_TOKEN. Join takes the call back from the agent.
       </T>
     </>
   );

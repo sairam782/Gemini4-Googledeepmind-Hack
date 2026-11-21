@@ -59,6 +59,8 @@ export type Settings = {
   backend: Backend;
   /** Abhi's agent server for web simulation, e.g. http://localhost:8787 */
   simServerUrl: string;
+  /** APP_TOKEN of the agent server. Needed when the app isn't on the server's own computer. */
+  simToken: string;
 };
 
 export type SafeWord = { id: string; name: string; word: string };
@@ -81,6 +83,7 @@ export const DEFAULT_SETTINGS: Settings = {
   serverUrl: process.env.EXPO_PUBLIC_SERVER_URL ?? '',
   backend: process.env.EXPO_PUBLIC_BACKEND === 'web' ? 'web' : 'phone',
   simServerUrl: process.env.EXPO_PUBLIC_SIM_SERVER_URL ?? 'http://localhost:8787',
+  simToken: '',
 };
 
 export const settingsStore = createStore<Settings>(DEFAULT_SETTINGS);

@@ -6,7 +6,8 @@
  * events (protocol.ts), so the Live call screen works the same way for both backends.
  *
  * That server's events carry no call ID, so the app finds calls through GET /api/health
- * (which lists them, newest last) and joins each new one over /ws.
+ * (which lists them, newest last) and joins each new one over /ws. Off the server's own computer,
+ * joining needs the server's APP_TOKEN (Setup → App token).
  */
 import type { ServerEvent, Verdict } from '@/lib/protocol';
 
@@ -59,6 +60,7 @@ export const simEnd = () => control('call.end');
  */
 export function connectSimulation(
   baseUrl: string,
+  token: string,
   emit: (e: ServerEvent) => void,
   onStatus: (online: boolean) => void,
 ): () => void {
@@ -138,7 +140,7 @@ export function connectSimulation(
     const a: Active = { callId, ws: new WebSocket(`${wsBase}/ws`), revision: 1, signs: new Map(), endTimer: null, done: false };
     active = a;
     emit({ type: 'call.started', callId, from: callerLabel(callId) });
-    a.ws.onopen = () => a.ws.send(JSON.stringify({ type: 'join', role: 'app', callId }));
+    a.ws.onopen = () => a.ws.send(JSON.stringify({ type: 'join', role: 'app', callId, ...(token ? { token } : {}) }));
     a.ws.onmessage = (msg) => {
       if (typeof msg.data !== 'string' || a.done) return;
       try {

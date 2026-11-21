@@ -62,10 +62,11 @@ function connect(url: string): () => void {
 }
 
 /** Web simulation: follow calls on Abhi's agent server (see simulation.ts). */
-function connectSim(url: string): () => void {
+function connectSim(url: string, token: string): () => void {
   connectionStore.set('connecting');
   const stop = connectSimulation(
     url,
+    token,
     (event) => {
       if (event.type === 'call.started') stopDemo();
       applyEvent(event, false);
@@ -83,19 +84,19 @@ function connectSim(url: string): () => void {
  * and reconnects whenever the switch, an address or the phone number changes.
  */
 export function useServerConnection() {
-  const { backend, serverUrl, simServerUrl, myPhone } = useStore(settingsStore);
+  const { backend, serverUrl, simServerUrl, simToken, myPhone } = useStore(settingsStore);
   useEffect(() => {
     if (backend === 'web') {
       if (!simServerUrl.trim()) {
         connectionStore.set('not-set-up');
         return;
       }
-      return connectSim(simServerUrl);
+      return connectSim(simServerUrl, simToken);
     }
     if (!serverUrl.trim() || !myPhone.trim()) {
       connectionStore.set('not-set-up');
       return;
     }
     return connect(webSocketUrl(serverUrl, myPhone));
-  }, [backend, serverUrl, simServerUrl, myPhone]);
+  }, [backend, serverUrl, simServerUrl, simToken, myPhone]);
 }

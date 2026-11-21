@@ -238,7 +238,7 @@ Setup → **Agent server** has a switch:
 | **Phone calls** (default) | `twilio-server/` at the server address, over `/app` | Real calls forwarded to the Twilio number | Join rings your phone; End and Block go to the server |
 | **Web simulation** | Abhi's `server/` (default `http://localhost:8787`), over `/ws` | Calls started on the web test desk (`https://localhost:5173/desk`) | Join takes the call back from the agent; End hangs up; Block is saved on the phone only |
 
-To test with the simulation: run `npm run dev:agent`, set the switch to **Web simulation**, and start a scenario on the desk. The call shows up on the Live call tab within about 2 seconds. On a real phone, use your computer's network address instead of `localhost`. The adapter is [`src/lib/simulation.ts`](src/lib/simulation.ts); it turns the server's `shared/brain.ts` events into the app's events, so both modes use the same screens.
+To test with the simulation: run `npm run dev:agent`, set the switch to **Web simulation**, and start a scenario on the desk. The call shows up on the Live call tab within about 2 seconds. On a real phone or through ngrok, use your computer's network address (or the ngrok address) and fill in **App token** with the server's `APP_TOKEN`; the server only skips the token for its own computer. The adapter is [`src/lib/simulation.ts`](src/lib/simulation.ts); it turns the server's `shared/brain.ts` events into the app's events, so both modes use the same screens.
 
 To change the default without tapping, set `EXPO_PUBLIC_BACKEND=web` (and optionally `EXPO_PUBLIC_SIM_SERVER_URL`) in `.env.local`. A choice saved in Setup wins.
 
