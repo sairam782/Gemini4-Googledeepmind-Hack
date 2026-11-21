@@ -68,6 +68,8 @@ app.on("message", (raw) => {
   if (m.type === "action.rejected") log(`   tap rejected: ${m.reason}`);
   if (m.type === "agent.cut") log(`   agent cut at ${m.turnId}`);
   if (m.type === "error") log(`   error: ${m.message}`);
+  if (m.type === "lane.result" && /held|strategy:/.test(m.note ?? "")) log(`   [${m.lane} @${m.turnId}] ${m.note}`);
+  if (m.type === "directions" && m.directions.length) log(`   board: ${m.directions.map((d) => `${d.suggested ? "*" : ""}[${d.source}] ${d.label}`).join(" | ")}`);
   if (m.type === "call.review") review = m.review;
 });
 app.send(JSON.stringify({ type: "join", role: "app", callId: callSid }));

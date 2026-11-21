@@ -76,7 +76,7 @@ export function guardSay(text: string): string | null {
   if (/\b(i|we|alex)('ll| will| can| am going to)\s+(send|pay|transfer|wire|venmo|zelle)\b/i.test(t)) return "commits to a payment";
   if (/\b(the code is|password is|pin is|here('s| is) the code)\b/i.test(t)) return "shares a code";
   if (/\b(private|note[sd]?|risk score|warning sign|scam)\b/i.test(t)) return "leaks private analysis";
-  if (/\bour\b|\bmy (childhood|family|pet|dog|cat|mom|dad|mother|father|grandma|grandmother|sister|brother|cousin|holiday)\b|\bbefore i (send|pay)\b|\bwe (all |both )?(visited|went|did|had|saw|used to|grew up|met|talked|spoke|always)\b/i.test(t))
+  if (/\bour\b|\bmy (childhood|family|pet|dog|cat|mom|dad|mother|father|grandma|grandmother|sister|brother|cousin|holiday)\b|\bbefore i (send|pay)\b|\bwhen we\b|\bwe (all |both )?(lived|were|grew|visited|went|did|had|saw|used to|met|talked|spoke|always|shared|played|stayed|called|took|ate)\b|\b(with|between) us\b/i.test(t))
     return "speaks as Alex or family instead of the assistant";
   if (/\b(end|hang up|disconnect)\b[^.]{0,20}\b(this|the) call\b/i.test(t)) return "ends the call (only Alex can)";
   return null;

@@ -43,6 +43,10 @@ export class CallBrain {
   private directions: Direction[] = [];
   private directionsFor: string | null = null; // caller turn the on-screen directions respond to
   private plannerFor: string | null = null; // caller turn the planner last answered
+  private strategy: { text: string; turnId: string } | null = null; // Argon's plan, used by later Flash-Lite passes
+  private held: { dirs: Direction[]; forTurn: string } | null = null; // upgrade waiting for Alex to take back
+  /** True while the agent has the floor: Alex may be reaching for a card, so don't swap tailored cards under them. */
+  holdUpgrades: () => boolean = () => false;
   private asked: DirectionCategory[] = [];
   private answered = new Set<DirectionCategory>();
   private locked = false;
@@ -105,6 +109,7 @@ export class CallBrain {
       onScreen: this.directions.map((d) => ({ category: d.category, label: d.label })),
       asked: this.asked,
       answered: [...this.answered],
+      strategy: this.strategy,
     };
   }
 
@@ -123,8 +128,10 @@ export class CallBrain {
     void plan(this.plannerInput(snapshot), "flash").then((r) => {
       if (this.ended) return;
       const fresh = this.lastCallerTurn()?.turnId === turn.turnId && this.plannerFor !== turn.turnId;
-      this.emit({ type: "lane.result", lane: "flash", model: r.model, turnId: turn.turnId, ms: r.ms, ok: !!r.out, note: r.out ? `${r.out.directions.length} directions${fresh ? "" : " (not shown: planner or a newer turn got there first)"}${r.out.dropped.length ? `; guard dropped ${r.out.dropped.join("; ")}` : ""}` : r.error });
-      if (r.out?.directions.length && fresh) this.setDirections(r.out.directions.map((d) => ({ ...d, id: this.nextId(), source: "flash" as const, revision: this.revision() })), turn.turnId);
+      const shown = r.out?.directions.length && fresh
+        ? this.offerBoard(r.out.directions.map((d) => ({ ...d, id: this.nextId(), source: "flash" as const, revision: this.revision() })), turn.turnId)
+        : "skipped";
+      this.emit({ type: "lane.result", lane: "flash", model: r.model, turnId: turn.turnId, ms: r.ms, ok: !!r.out, note: r.out ? `${r.out.directions.length} directions${fresh ? (shown === "held" ? " (held while the agent has the floor)" : "") : " (not shown: planner or a newer turn got there first)"}${this.strategy ? " +strategy" : ""}${r.out.dropped.length ? `; guard dropped ${r.out.dropped.join("; ")}` : ""}` : r.error });
     });
 
     // Risk lane: Hydrogen check of this turn.
@@ -187,18 +194,22 @@ export class CallBrain {
     if (this.ended) return;
     const stale = this.lastCallerTurn()?.turnId !== forTurn.turnId;
     const out = r.out;
+    // Even a late result pays off: the strategy steers the next Flash-Lite pass.
+    if (out?.strategy) this.strategy = { text: out.strategy, turnId: forTurn.turnId };
+    let shown: "shown" | "held" | "skipped" = "skipped";
+    if (out && !stale && out.directions.length) {
+      this.plannerFor = forTurn.turnId;
+      shown = this.offerBoard(out.directions.map((d) => ({ ...d, id: this.nextId(), source: "planner" as const, revision: this.revision() })), forTurn.turnId);
+    }
     this.emit({
       type: "lane.result", lane: "planner", model: r.model, turnId: forTurn.turnId, ms: r.ms, ok: !!out,
-      note: out ? `${out.directions.length} directions${stale ? " (stale: newer turn arrived, not shown)" : ""}${out.dropped.length ? `; guard dropped ${out.dropped.join("; ")}` : ""}` : r.error,
+      note: out ? `${out.directions.length} directions${stale ? " (stale: newer turn arrived, not shown)" : shown === "held" ? " (held while the agent has the floor)" : ""}${out.strategy ? `; strategy: ${out.strategy}` : ""}${out.dropped.length ? `; guard dropped ${out.dropped.join("; ")}` : ""}` : r.error,
     });
     if (!out) return;
     for (const a of out.answered) {
       this.answered.add(a.category);
       for (const d of this.directions.filter((x) => x.category === a.category)) this.withdraw(d, "already answered", a.evidenceTurnId);
     }
-    if (stale || !out.directions.length) return;
-    this.plannerFor = forTurn.turnId;
-    this.setDirections(out.directions.map((d) => ({ ...d, id: this.nextId(), source: "planner" as const, revision: this.revision() })), forTurn.turnId);
   }
 
   // ---------------------------------------------------------------- notes (Hydrogen)
@@ -294,7 +305,22 @@ export class CallBrain {
     this.setDirections(dirs, turn.turnId);
   }
 
+  /**
+   * A tailored board (Flash-Lite or Argon) for `forTurn`. Replacing stock cards or an older turn's board is
+   * always fine; replacing tailored cards for the same turn waits while the agent has the floor.
+   */
+  private offerBoard(dirs: Direction[], forTurn: string): "shown" | "held" {
+    const sameTurnTailored = this.directionsFor === forTurn && this.directions.some((d) => d.source !== "stock");
+    if (this.holdUpgrades() && sameTurnTailored) {
+      this.held = { dirs, forTurn };
+      return "held";
+    }
+    this.setDirections(dirs, forTurn);
+    return "shown";
+  }
+
   private setDirections(dirs: Direction[], forTurn: string) {
+    this.held = null;
     this.directions = dirs;
     this.directionsFor = forTurn;
     this.emit({ type: "directions", directions: dirs, revision: this.revision() });
@@ -307,6 +333,12 @@ export class CallBrain {
 
   /** Re-issue on-screen directions under a new control revision (after delegate/takeback). */
   reissue() {
+    const h = this.held;
+    if (h && !this.holdUpgrades() && h.forTurn === this.lastCallerTurn()?.turnId && this.directions.length) {
+      this.held = null;
+      this.directions = h.dirs.filter((d) => !this.answered.has(d.category));
+      this.directionsFor = h.forTurn;
+    }
     this.directions = this.directions.map((d) => ({ ...d, revision: this.revision() }));
     this.emit({ type: "directions", directions: this.directions, revision: this.revision() });
   }
@@ -318,6 +350,7 @@ export class CallBrain {
   /** A tap was accepted: one question at a time, so the board clears until the caller answers. */
   picked(d: Direction) {
     this.asked.push(d.category);
+    this.held = null;
     this.directions = [];
     this.emit({ type: "directions", directions: [], revision: this.revision() });
   }

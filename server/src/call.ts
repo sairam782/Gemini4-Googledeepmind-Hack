@@ -1,6 +1,7 @@
 import type { CallReview, DeskClientMsg, DeskServerMsg, Floor, Lane, Level, Speaker } from "../../shared/brain.ts";
 import { CallBrain } from "./brain/orchestrator.ts";
-import { INTRO, guardSay } from "./brain/catalog.ts";
+import { INTRO, STOCK, guardSay } from "./brain/catalog.ts";
+import { renderSpeech, ttsEnabled } from "./tts.ts";
 import { reviewCall } from "./brain/review.ts";
 import type { CallContext } from "./brain/lanes.ts";
 
@@ -44,6 +45,9 @@ export class LiveCall {
     private expected?: { level: Level; verdict: string },
   ) {
     this.brain = new CallBrain(ctx, (m) => this.emit(m), () => this.revision);
+    this.brain.holdUpgrades = () => this.floor === "agent";
+    // Warm the speech cache with every line the agent can say before any model has run.
+    if (ttsEnabled()) [INTRO, ...STOCK.map((d) => d.say)].forEach((t) => void renderSpeech(t).catch(() => {}));
     calls.set(id, this);
     latest = id;
   }

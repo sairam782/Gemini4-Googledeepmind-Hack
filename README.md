@@ -22,6 +22,18 @@ Each finished caller line is sent to every lane at once. The app merges the resu
 | Call review | review | `gemini-4-carbon` (`REVIEW_MODEL`) | ~5 s after hang-up | Summary, verdict, follow-up drafts. Evals are computed in code. |
 | Follow-up agent | – | Gemini Managed Agents | **not built** | Today Carbon drafts the follow-ups. Acting on them (with Alex's approval) is the next step. |
 
+How the directions board fills in on each caller line:
+
+1. **~1 ms:** stock cards from the rules. Their speech is pre-rendered when the call starts.
+2. **~1.3 s:** tailored cards from Flash-Lite.
+3. **~7–15 s:** Argon's cards, if no newer caller line arrived first.
+
+Even when Argon is late, it writes a one-sentence **strategy** that the next Flash-Lite pass follows. For example: "caller dodged the family check; push the callback, then decline". The slow model always contributes something.
+
+While the agent has the floor, tailored cards for the same caller line are not swapped under Alex's finger. The upgrade is held until Alex takes back.
+
+We benchmarked Hydrogen as the fast lane, to keep the live path all Gemini 4. With thinking low it took 4.1–5.0 s against Flash-Lite's ~1.3 s, and with thinking off most calls timed out. So Flash-Lite stays; `FLASH_MODEL` flips it.
+
 Lanes that are slower than one caller line run one at a time, and a newer line queues a single rerun, so they never pile up. A lane that fails or times out adds nothing that turn; the call keeps going.
 
 ### Rules the code enforces (models only propose)

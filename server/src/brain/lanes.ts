@@ -55,10 +55,12 @@ export interface PlannerInput {
   onScreen: Pick<Direction, "category" | "label">[];
   asked: DirectionCategory[];
   answered: DirectionCategory[];
+  strategy?: { text: string; turnId: string } | null; // Argon's private plan, carried to the next turn
 }
 export interface PlannerOutput {
   directions: Omit<Direction, "id" | "source" | "revision">[];
   answered: { category: DirectionCategory; evidenceTurnId: string }[];
+  strategy: string; // planner lane only: one-sentence plan for the next lines
   dropped: string[];
 }
 
@@ -82,17 +84,20 @@ Warning signs so far: ${input.signs.join(", ") || "none"}
 Notes: ${JSON.stringify(input.notes)}
 On Alex's screen now: ${JSON.stringify(input.onScreen)}
 Categories already asked: ${JSON.stringify(input.asked)}. Already answered: ${JSON.stringify(input.answered)}.
-
+${input.strategy ? `Strategy from the senior planner (written after ${input.strategy.turnId}; follow it if it still fits): ${input.strategy.text}
+` : ""}
 Always write exactly 3 options, even if the screen already has good ones (refresh them for the newest line). Categories: ${CATEGORIES.join(", ")}.
 - "say": the exact sentence, under 25 words, one question or statement, calm and polite.
+- Family checks ask about Alex in the third person ("Alex asked me to check: what was the name of Alex's first pet?"), never "we" or "our".
 - Unverified identity + money → prefer verify_identity ("Alex asked me to check: ...") or offer_callback (Alex calls back on the number Alex already has).
 - A code or payment requested after a dodged or failed check → decline.
 - Ordinary everyday calls → helpful details (what it covers, get it in writing, confirm a corrected value).
 - Exactly one option has "suggested": true. Don't repeat an asked or answered category unless the caller dodged it.
 - "answered": on-screen categories the caller already answered, with the turn id.
-
+${lane === "planner" ? `- "strategy": one private sentence for the faster assistant that writes the next lines: which check or trap to use next and why (e.g. "Caller dodged the family check; push the callback, then decline").
+` : ""}
 Return JSON only:
-{"directions":[{"category":"","label":"","say":"","why":"","whyTurnId":"","suggested":false}],"answered":[{"category":"","evidenceTurnId":""}]}`;
+{"directions":[{"category":"","label":"","say":"","why":"","whyTurnId":"","suggested":false}],"answered":[{"category":"","evidenceTurnId":""}]${lane === "planner" ? ',"strategy":""' : ""}}`;
 
   const r = await generateJson<Partial<PlannerOutput>>(opts.model, prompt, { timeoutMs: opts.timeoutMs, thinking: opts.thinking });
   if (!r.ok) return { ...r, model: opts.model, out: null };
@@ -124,7 +129,8 @@ Return JSON only:
     directions = directions.map((x, i) => ({ ...x, suggested: i === 0 }));
   }
   const answered = arr<PlannerOutput["answered"][number]>(Array.isArray(r.data) ? [] : r.data!.answered).filter((a) => CATEGORIES.includes(a?.category) && ids.has(a?.evidenceTurnId));
-  return { ...r, model: opts.model, out: { directions, answered, dropped } as PlannerOutput };
+  const strategy = Array.isArray(r.data) ? "" : String(r.data!.strategy ?? "").trim().slice(0, 240);
+  return { ...r, model: opts.model, out: { directions, answered, dropped, strategy } as PlannerOutput };
 }
 
 // ---------------------------------------------------------------- Notes (Hydrogen): facts with corrections, open decision
