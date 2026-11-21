@@ -1,22 +1,156 @@
 # Uno ReVoice
 
-Uno ReVoice is a phone app that lets an AI agent answer calls from unknown numbers for you. The agent asks the caller who they are and checks them for scam signs. You watch the call live and can join, end or block it.
+When a call comes in from an unknown number, Uno ReVoice hands it to a clearly identified AI assistant. The assistant asks the caller who they are and checks them for scam signs while Alex watches live, steers its next line in private, and can take the call back, end it or block the number in one tap. Several Gemini models listen in parallel: they flag scam warning signs, keep notes, and suggest the next line. App code makes every decision that matters. Gemini 4 NYC Hackathon.
 
 ```
-Unknown caller ──► your phone declines it (Android) / silences it (iPhone)
+Unknown caller ──► Alex's phone declines it (Android) / silences it (iPhone)
                    └─► carrier forwards it to the Twilio number
-                        └─► the agent answers ──► server ──WebSocket──► this app
+                        └─► the agent answers ──► server ──WebSocket──► phone app
 ```
+
+## What's in this repo
+
+| Folder | What it is | Run it |
+| --- | --- | --- |
+| `/` (root) | **Phone app** (Expo / React Native): Live call, History, Setup, Android call check | `npm install`, then `npx expo run:ios` or `npx expo run:android` |
+| `server/` | **Agent server** (TypeScript): Twilio bridge, Gemini transcription, the multi-model brain, call review | `cd server && npm install && npm run dev` |
+| `web/` | **Brain test desk** (Vite + React) for the server | `cd web && npm install && npm run dev` |
+| `shared/` | Event contract shared by `server/` and `web/` (`shared/brain.ts`) | – |
+| `twilio-server/` | Earlier plain-JS Twilio starter server, kept for reference | `cd twilio-server && npm install && npm start` |
+
+Each folder installs on its own. The root `package.json` belongs to the phone app, so there is no npm workspace; `web/` uses React 18 and the app uses React 19, and they must not share `node_modules`. From the root, `npm run dev:agent` starts `server/` and `web/` together (install both first).
 
 ## Status
 
 | Part | State |
 | --- | --- |
-| Phone app (this repo) | Built: Live call, History and Setup screens, demo calls, Android call check, forwarding codes, push handling. |
-| Agent server | **Not connected yet.** The team's server is on the `main` branch (`server/`). The app expects the contract below; the two still need to be matched up. |
-| Gemini agent (voice + scam check) | Not connected yet. It runs on the server. |
+| Phone app | Built: Live call, History and Setup screens, demo calls, Android call check, forwarding codes, push handling. |
+| Agent server + brain | Built in `server/`: 56/56 evals pass on the 8 scripted calls (see below). |
+| **App ↔ server** | **Not connected yet.** The app expects the contract in [Phone app: server contract](#phone-app-server-contract) (`/app` socket, `/api/calls/...` routes). The server speaks the protocol in [API for the phone app](#api-for-the-phone-app) (`/ws` socket, `shared/brain.ts` events). One side has to adopt the other's. |
 
-Until the app is connected to the server, only the demo calls work.
+Until the two are connected, the phone app's demo calls are the only way to see the Live call screen.
+
+---
+
+# Agent server
+
+## Architecture
+
+![ReVoice architecture](docs/architecture.png)
+
+Each finished caller line is sent to every lane at once. The app merges the results.
+
+| Box | Lane | Model (env) | Typical latency | Job |
+|---|---|---|---|---|
+| Caller turn | transcribe | `gemini-3.5-transcribe-live` (`TRANSCRIBE_MODEL`) | final line ~1 s after the caller stops | One Live session per phone track, so speakers are known without diarization. Interim words stream as captions. |
+| Fast lane | rules + flash | regex + `gemini-3.5-flash-lite` (`FLASH_MODEL`) | 1 ms / ~1.3 s | Instant signs and stock directions, then tailored directions in about a second. |
+| Risk | risk | `gemini-4-hydrogen` (`RISK_MODEL`) | ~3 s | Provisional warning signs on the newest line. |
+| Notes | notes | `gemini-4-hydrogen` (`NOTES_MODEL`) | ~4–5 s | Facts with corrections ("$230, was $280"), each citing its turn, plus the open decision. |
+| Planner | planner | `gemini-4-argon` (`PLANNER_MODEL`) | ~7–15 s | The next 3 directions with the exact words. Dropped if a newer caller line arrived first. |
+| Supervisor | supervisor | `gemini-4-neon` (`SUPERVISOR_MODEL`) | ~6–8 s | Reads the whole call: confirms or removes signs, vetoes unsafe or pointless directions. |
+| Merge and guard | app code | `server/src/brain/orchestrator.ts`, `catalog.ts` | – | Drops stale results, withdraws answered directions, scores risk with fixed weights, locks "High risk: confirmed", blocks unsafe words. |
+| Alex's panel | app | `/desk` today, phone app next | – | Notes, signs, 3 directions, take over / take back. |
+| Pre-render speech | tts | `gemini-3.8-flash-tts` (`TTS_MODEL`) | cached | Every suggested line is rendered as it arrives, so a tap starts speaking in ~10 ms. |
+| Call review | review | `gemini-4-carbon` (`REVIEW_MODEL`) | ~5 s after hang-up | Summary, verdict, follow-up drafts. Evals are computed in code. |
+| Follow-up agent | – | Gemini Managed Agents | **not built** | Today Carbon drafts the follow-ups. Acting on them (with Alex's approval) is the next step. |
+
+Lanes that are slower than one caller line run one at a time, and a newer line queues a single rerun, so they never pile up. A lane that fails or times out adds nothing that turn; the call keeps going.
+
+### Rules the code enforces (models only propose)
+
+- **Score:** fixed weights per sign (money +3, code +4, failed family check +3, refused callback +3, third-party payment +2, ...; passing the family check −5). Low 0–3, Medium 4–7, High 8+.
+- **Lock:** "High risk: confirmed" needs a supervisor-confirmed High score, a failed family check or refused callback, and a money or code request. Once locked, it stays locked.
+- **Guard on everything the agent says:** no codes or 4–8 digit numbers, no approvals or payment promises, no notes, scores or "scam" talk, no speaking as Alex or family, never ends the call.
+- **Floor:** every tap carries an action ID and a revision. Duplicates and stale taps are rejected. Take back and End always work. One question at a time.
+
+## Run the server and test desk
+
+```bash
+cp .env.example .env   # add GEMINI_API_KEY (the server reads ../.env)
+cd server && npm install && cd ..
+cd web && npm install && cd ..
+npm run dev:agent      # server on :8787, desk on :5173
+```
+
+- **Brain test desk:** `https://localhost:5173/desk`. Scripted calls stand in for the phone. Each scripted line goes through every lane. You can type live lines, take over, tap a direction (the agent speaks), press Esc to cut it off, then end the call to see the Carbon review.
+- **Server:** `http://localhost:8787`
+
+### Headless runs and evals
+
+```bash
+cd server
+npx tsx --env-file=../.env scripts/replay.ts maya        # one call, full event log + review
+npx tsx --env-file=../.env scripts/replay.ts all         # all 8 scenarios in parallel, eval table
+npx tsx --env-file=../.env scripts/sim-twilio.ts maya    # fake Twilio call against the running server
+```
+
+Latest `replay.ts all` run: **56/56 evals pass**.
+- Correct risk level and verdict on all 8 calls.
+- Every scam that failed a check locked as "High risk: confirmed".
+- No legitimate call was flagged.
+- Each caller line got tailored directions before the next line.
+- The agent spoke no codes and no private analysis.
+
+`sim-twilio.ts` streams the scenario as real 8 kHz µ-law phone audio into `/twilio`. It joins as Alex's app, takes over, picks a direction, takes back mid-sentence and hangs up, so it exercises the whole phone path without a Twilio account.
+
+## Phone (Twilio)
+
+1. Expose the server, e.g. `ngrok http 8787`, and set `PUBLIC_HOST` to the ngrok host.
+2. Point the Twilio number's voice webhook to `POST https://<PUBLIC_HOST>/twilio/voice`. It returns TwiML that `<Connect><Stream>`s the call to `wss://<PUBLIC_HOST>/twilio`.
+3. What the server does on that stream:
+   - **Inbound track:** transcribed as the caller.
+   - **Outbound track, if streamed:** transcribed as Alex.
+   - **Agent lines:** sent back into the call as µ-law audio, followed by a `mark`.
+   - **Take back:** sends `clear`, which stops playback at once.
+4. Alex's app joins the live call over WebSocket.
+
+## API for the phone app
+
+Connect to `ws(s)://<host>/ws` and send `{ "type": "join", "role": "app", "callId": "<CallSid>" | "latest" }`. Every event since the call started is replayed, then events stream live. The message types are in `shared/brain.ts`.
+
+**Server → app**
+- `turn.final`, `caption.interim`
+- `risk.signal`, `risk.level`
+- `notes.update`, `decision.open`
+- `directions`, `directions.withdrawn`
+- `agent.say`, `agent.cut`
+- `state`, `lane.result`
+- `call.ended`, `call.review`
+
+**App → server.** Every tap carries `actionId` and `revision`.
+- `control.delegate`, `control.takeback`
+- `direction.pick`, `call.end`
+- `desk.say` with speaker `alex`, to type a line
+
+**HTTP**
+- `GET /api/health`
+- `POST /api/tts` with `{text, voice}`, returns WAV
+- `POST /twilio/voice` (TwiML)
+- `GET /api/calls/<id>/review`
+
+## Server layout
+
+```
+shared/brain.ts               event contract (desk, phone app, server)
+server/src/call.ts            LiveCall: brain + floor, revision, one-shot taps, agent voice, review on hang-up
+server/src/brain/orchestrator.ts  fan-out, merge, stale/answered handling, risk scoring
+server/src/brain/lanes.ts     risk, notes, planner/flash, supervisor prompts + output validation
+server/src/brain/review.ts    Carbon summary/verdict/follow-ups + code evals
+server/src/brain/catalog.ts   sign weights, lock rule, stock directions, guard
+server/src/brain/rules.ts     regex fast lane
+server/src/transcribe.ts      Gemini 3.5 Transcribe (Live) per track
+server/src/twilio.ts          Twilio Media Streams bridge + TwiML
+server/src/audio.ts           WAV, resampling, µ-law
+server/src/scenarios.ts       8 scripted calls (4 scam, 4 legitimate/everyday)
+server/src/desk.ts            desk/app socket sessions
+web/src/pages/DeskPage.tsx    test desk UI
+```
+
+The earlier two-laptop WebRTC prototype is still in place: `/alex`, `/caller`, `server/src/room.ts`, `web/src/lib/{rtc,mixer}.ts`.
+
+---
+
+# Phone app
 
 ## Screens
 
@@ -28,7 +162,7 @@ Until the app is connected to the server, only the demo calls work.
 
 Family safe words are **turned off for now** (`FEATURES.safeWords` in [`src/constants/features.ts`](src/constants/features.ts)). Instead, the agent offers a callback on the caller's usual number. See [Later](#later).
 
-## Run it
+## Run the phone app
 
 You need Node LTS and Xcode (for iPhone) or the Android SDK with a USB-debugging phone (for Android). The app uses a **development build**, not Expo Go, because of the native Android call-screening module.
 
@@ -49,11 +183,13 @@ EXPO_PUBLIC_SERVER_URL=https://your-server.example.com
 EXPO_PUBLIC_AGENT_NUMBER=+15550000000   # the Twilio number; not a secret
 ```
 
-The Twilio Account SID and Auth Token stay on the server. Never put them in this app, an env file, or the repository.
+The Twilio Account SID and Auth Token stay on the server. Never put them in the app, a committed env file, or the repository.
 
 Push notifications need an EAS project. Run `npx eas-cli@latest init` once, then rebuild.
 
-## Server contract
+## Phone app: server contract
+
+This is what the app currently expects. It does **not** match the agent server's [`/ws` API](#api-for-the-phone-app) yet.
 
 ### WebSocket: server → app
 
@@ -124,15 +260,16 @@ iOS doesn't let apps decide per call. Go to **Settings → Apps → Phone → Sc
 ## Known limits
 
 - **Faked contact numbers.** A scammer showing a contact's number (for example "Mom") rings normally unless the network marks the caller ID as failed (Android 11+ only). Calls marked "not verified" still ring. On iPhone, every contact rings.
-- **No sign-in.** The WebSocket identifies the user only by `?phone=`. Fine for a demo; a real release needs a per-device token.
+- **No sign-in.** The app's WebSocket identifies the user only by `?phone=`. Fine for a demo; a real release needs a per-device token.
 - **Only Android decides per call.** iPhone relies on Silence Unknown Callers, so the caller hears a few rings before forwarding.
 - **Twilio free trial.** Only verified numbers can call in or be called, and each call starts with a trial message and a key press.
 
 ## Later
 
+- [ ] **Connect the phone app to the agent server.** Pick one protocol (the app's `/app` contract or the server's `/ws` + `shared/brain.ts`) and change the other side.
 - [ ] **Bring back family safe words.** Set `FEATURES.safeWords` to `true` in [`src/constants/features.ts`](src/constants/features.ts). The Setup section, secure storage, upload (`/api/safe-words`) and on-screen masking are already built. The server then needs to store them and give them to the agent, which asks callers who claim to be family. They are stored in the phone's secure storage, sent only over HTTPS, and replaced with `•••` if they appear in a transcript or verdict.
 
-## Project layout
+## Phone app layout
 
 ```
 src/app/            index.tsx (Live call), history.tsx, setup.tsx, _layout.tsx (tabs)
@@ -140,4 +277,5 @@ src/lib/            protocol, call state, WebSocket, demo calls, server API, sto
 src/components/     verdict card, transcript bubbles, brand, shared UI
 src/constants/      theme colors, feature switches (features.ts)
 modules/call-screener/  Android CallScreeningService + role request (Kotlin)
-assets/brand/       logo SVGs (app icons in assets/images are rendered from these)```
+assets/brand/       logo SVGs (app icons in assets/images are rendered from these)
+```

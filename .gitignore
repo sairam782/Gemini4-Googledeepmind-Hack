@@ -25,12 +25,15 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+*.log
 
 # macOS
 .DS_Store
 *.pem
 
-# local env files
+# local env files (Twilio and Gemini keys live here; never commit them)
+.env
+.env.local
 .env*.local
 
 # typescript
@@ -38,6 +41,6 @@ yarn-error.*
 
 example
 
-# generated native folders
+# generated native folders (Continuous Native Generation)
 /ios
 /android
