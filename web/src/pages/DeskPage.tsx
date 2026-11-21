@@ -45,6 +45,9 @@ export function DeskPage() {
   const [review, setReview] = useState<CallReview | null>(null);
   const [critic, setCritic] = useState<{ report: CriticReport; metrics: JudgeMetrics; label: Label } | null>(null);
   const [playbook, setPlaybook] = useState<Extract<DeskServerMsg, { type: "playbook.updated" }> | null>(null);
+  // Risk as it stood after each caller line, for the ticks on the conversation line.
+  const [turnRisk, setTurnRisk] = useState<Record<string, { level: RiskLevel["level"]; score: number; locked: boolean }>>({});
+  const lastCaller = useRef<string | null>(null);
   const [m, setM] = useState({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null as number | null, takeback: null as number | null });
 
   const sock = useRef<WebSocket | null>(null);
@@ -96,7 +99,7 @@ export function DeskPage() {
       case "call.started":
         setScenario(msg.scenario);
         setScript(msg.script);
-        setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null); setCritic(null); setPlaybook(null);
+        setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null); setCritic(null); setPlaybook(null); setTurnRisk({}); lastCaller.current = null;
         setM({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null, takeback: null });
         if (refs.current.voiceOn) msg.script.forEach((l) => void player().clip(l, CALLER_VOICE).catch(() => {}));
         void player().clip("Hi, this is Alex's AI assistant. Alex is listening in.", AGENT_VOICE).catch(() => {});
@@ -106,6 +109,7 @@ export function DeskPage() {
         break;
       case "turn.final":
         setTurns((t) => [...t, msg.turn]);
+        if (msg.turn.speaker === "caller") lastCaller.current = msg.turn.turnId;
         if (msg.turn.speaker === "caller") {
           // Tell the server when the caller's line has been heard; the auto-speak clock starts there.
           const done = () => send({ type: "desk.callerDone", turnId: msg.turn.turnId });
@@ -130,6 +134,10 @@ export function DeskPage() {
         break;
       case "risk.level":
         setRisk(msg.risk);
+        if (lastCaller.current) {
+          const id = lastCaller.current;
+          setTurnRisk((r) => ({ ...r, [id]: { level: msg.risk.level, score: msg.risk.score, locked: msg.risk.locked } }));
+        }
         break;
       case "notes.update":
         setNotes((n) => {
@@ -169,6 +177,7 @@ export function DeskPage() {
         break;
       case "call.ended":
         player().stop();
+        setDirs([]); setWithdrawn([]); setAutoAt(null);
         flash(msg.reason);
         break;
       case "error":
@@ -246,220 +255,249 @@ export function DeskPage() {
   });
 
   // ---- render helpers
-  const turnN = (id: string | null | undefined) => (id ? `turn ${id.slice(1)}` : "");
-  const who = (t: Turn) => (t.speaker === "alex" ? "Alex" : t.speaker === "agent" ? "ReVoice (AI)" : scenario?.caller ?? "Caller");
-  const lvlClass = risk?.level === "High" ? "high" : risk?.level === "Medium" ? "mid" : "low";
+  const turnN = (id: string | null | undefined) => (id ? `line ${id.slice(1)}` : "");
+  const who = (t: Turn) => (t.speaker === "alex" ? "You" : t.speaker === "agent" ? "Your AI assistant" : scenario?.caller ?? "Caller");
+  const lvlClass = (l?: RiskLevel["level"]) => (l === "High" ? "high" : l === "Medium" ? "mid" : "low");
   const signList = Object.values(signs).sort((a, b) => Number(a.status === "removed") - Number(b.status === "removed") || b.weight - a.weight);
   const live = floor !== "ended";
+  const secondsLeft = autoAt ? Math.max(0, Math.ceil((autoAt - now) / 1000)) : 0;
+  const AUTO_MS = 4000;
   const fs =
-    !live ? ["No call", scenario ? "Call ended. Start another scenario." : "Pick a scenario and start the call."]
-    : floor === "agent" ? [speaking ? "ReVoice is speaking" : autoAt ? `ReVoice speaks its best line in ${Math.max(0, Math.ceil((autoAt - now) / 1000))}s` : "ReVoice has the floor", autoAt && !speaking ? "Tap a direction to choose it yourself" : "Esc or Take back stops it instantly"]
-    : ["You have the floor", "ReVoice is listening, scoring and suggesting"];
+    !live ? [scenario ? "Call ended" : "No call yet", scenario ? "Read the report below, or start another call." : "Pick a caller and start the call."]
+    : floor === "agent" ? [speaking ? "Your assistant is speaking" : autoAt ? `Your assistant speaks in ${secondsLeft}s` : "Your assistant has the call", autoAt && !speaking ? "Tap a suggestion to choose its next line yourself" : "Press Esc or Take back to stop it at once"]
+    : ["You have the call", "Your assistant is listening, scoring the risk and suggesting what to ask"];
+  // Score → position on the Low / Medium / High track (High starts at 8; clamp at 14 so the marker stays on the bar).
+  const markPos = Math.max(2, Math.min(98, ((Math.max(0, risk?.score ?? 0) + 0.5) / 12) * 100));
+  const LANE_LABEL: Record<Exclude<Lane, "review">, string> = { rules: "Instant rules", flash: "Quick suggestions", risk: "Risk check", notes: "Notes", planner: "Planner", supervisor: "Supervisor" };
+  const GRADE: Record<"classification" | "questioning" | "timing" | "safety", string> = { classification: "Right call", questioning: "Questions", timing: "Timing", safety: "Safety" };
 
   return (
     <div className="wrap">
-      <div className="top">
+      <div className="deskhead">
         <div>
-          <h1>Brain test desk</h1>
-          <p className="hint" style={{ margin: 0 }}>Gemini plays the caller live (or a fixed script) in place of Twilio. Every caller line fans out to the rules, Flash-Lite, Hydrogen risk and notes, Argon planner and Neon supervisor. Carbon reviews the call after hang-up.</p>
+          <h1>Call desk</h1>
+          <p>Gemini plays the caller. Hand the call to your assistant, steer what it asks, and see how risky the call is after every line.</p>
         </div>
-        <div className="ctl">
-          <select value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
-            {scenarios.map((s) => <option key={s.id} value={s.id}>{s.title} · {s.kind}</option>)}
+        <div className="setup">
+          <select className="select" aria-label="Caller" value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
+            {scenarios.map((s) => <option key={s.id} value={s.id}>{s.title.replace(/\s*\([^)]*demo\)/i, "")}{s.kind === "scam" ? " (scam)" : s.kind === "legit" ? " (real)" : " (everyday)"}</option>)}
           </select>
-          <button className="btn primary" onClick={start} disabled={ws !== "open"}>{live ? "Restart call" : "Start call"}</button>
-          <label className="tog"><input type="checkbox" checked={liveCaller} onChange={(e) => setLiveCaller(e.target.checked)} /> Live caller (Gemini)</label>
-          {!liveCaller && <>
-            <button className="btn soft" onClick={next} disabled={!live || nextLine >= script.length}>
-              Next caller line {script.length ? `(${nextLine}/${script.length})` : ""}
+          <label className="toggle"><input type="checkbox" checked={liveCaller} onChange={(e) => setLiveCaller(e.target.checked)} /> Live caller</label>
+          <label className="toggle"><input type="checkbox" checked={voiceOn} onChange={(e) => { setVoiceOn(e.target.checked); if (!e.target.checked) voice.current?.stop(); }} /> Voices</label>
+          {!liveCaller && live && <>
+            <button className="btn soft" onClick={next} disabled={nextLine >= script.length}>
+              Next caller line <span className="num">{nextLine}/{script.length}</span>
             </button>
-            <label className="tog"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Auto after agent</label>
+            <label className="toggle"><input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Auto-advance</label>
           </>}
-          <label className="tog"><input type="checkbox" checked={voiceOn} onChange={(e) => { setVoiceOn(e.target.checked); if (!e.target.checked) voice.current?.stop(); }} /> Voices</label>
+          <button className="btn primary" onClick={start} disabled={ws !== "open"}>{live ? "Restart call" : "Start call"}</button>
         </div>
       </div>
 
-      <div className="floor">
-        <div className="pills">
-          {(["alex", "caller", "agent"] as const).map((k) => (
-            <span key={k} className={`pill${(k === "agent" && floor === "agent") || (k === "alex" && floor === "alex") ? " on" : ""}${k === "agent" && speaking ? " ai" : ""}`}>
-              <i />{k === "alex" ? "Alex" : k === "caller" ? scenario?.caller ?? "Caller" : "ReVoice"}
-            </span>
-          ))}
+      <div className={`floor ${floor === "agent" ? "agent" : !live && scenario ? "ended" : ""}`} role="status" aria-live="polite">
+        <div className="seats" aria-hidden="true">
+          <span className={`seat${floor === "alex" ? " on" : ""}`}><i />You</span>
+          <span className={`seat${floor === "agent" ? " on ai" : ""}`}><i />Assistant</span>
+          <span className="seat"><i />{scenario?.caller ?? "Caller"}</span>
         </div>
         <div className="fstate"><b>{fs[0]}</b><small>{fs[1]}</small></div>
         {floor === "agent"
           ? <button className="btn take" onClick={takeBack}>Take back <span className="kbd">Esc</span></button>
-          : <button className="btn primary" onClick={delegate} disabled={!live}>Agent take over</button>}
+          : <button className="btn agent" onClick={delegate} disabled={!live}>Hand to assistant</button>}
         <button className="btn ghost" onClick={end} disabled={!live}>End call</button>
       </div>
 
-      <div className="hud">
-        <span>Server <b>{ws}</b></span>
-        {(Object.keys(LANE_NAMES) as (keyof typeof LANE_NAMES)[]).map((l) => (
-          <span key={l} title={lanes[l]?.note}>
-            {LANE_NAMES[l]}{" "}
-            <b style={{ color: lanes[l] && !lanes[l]!.ok ? "var(--bad)" : undefined }}>{lanes[l] ? `${lanes[l]!.ms} ms` : "–"}</b>
-          </span>
-        ))}
-        <span>Taps accepted <b>{m.accepted}</b></span>
-        <span>Rejected <b>{m.rejected}</b></span>
-        <span>Cut-offs <b>{m.cuts}</b></span>
-        <span>Tap → audio <b>{m.tapToAudio == null ? "–" : `${m.tapToAudio} ms`}</b></span>
-        <span className="good">Takeback (local) <b>{m.takeback == null ? "–" : `${m.takeback} ms`}</b></span>
-      </div>
-
-      <div className="grid3">
+      <div className="desk">
         <div>
-          <section className="card">
-            <div className="ch"><h2>Guide the agent</h2><span className="tag">Only you</span></div>
-            {!live && <p className="hint">Start a call to see suggestions.</p>}
-            {live && floor === "alex" && dirs.length > 0 && <p className="hint">Tap Agent take over. Tap a suggestion, or ReVoice says its most confident one after a few seconds.</p>}
-            {live && floor === "agent" && speaking && <p className="hint">ReVoice is asking your question…</p>}
-            {live && dirs.length === 0 && !speaking && <p className="hint">Listening… suggestions update after each caller line.</p>}
+          <section className="panel">
+            <div className="panel-h"><h2>What to ask next</h2><span className="aside">Only you see this</span></div>
+            {floor === "agent" && autoAt && !speaking && (
+              <div className="countdown" aria-hidden="true"><div style={{ width: `${Math.min(100, (secondsLeft * 1000 / AUTO_MS) * 100)}%` }} /></div>
+            )}
+            {!live && <p className="hint">{scenario ? "The call has ended." : "Start a call. Suggestions appear after the caller's first line."}</p>}
+            {live && floor === "alex" && dirs.length > 0 && <p className="hint" style={{ marginBottom: 12 }}>Hand the call to your assistant to use these.</p>}
+            {live && floor === "agent" && speaking && <p className="hint" style={{ marginBottom: 12 }}>Your assistant is asking now.</p>}
+            {live && dirs.length === 0 && !speaking && <p className="hint">Listening. New suggestions come after each caller line.</p>}
             <div className="dirs">
               {dirs.map((d) => (
-                <button key={d.id} className="dir" onClick={() => pick(d)} disabled={floor !== "agent" || !!speaking}>
-                  <span className="l">{d.label}{d.suggested && <span className="rec">Suggested</span>}<span className={`src ${d.source}`}>{d.source === "planner" ? "Argon" : d.source === "flash" ? "Flash-Lite" : "instant"}</span></span>
-                  <span className="say">Will say: “{d.say}”</span>
-                  <span className="why">Why: {d.why} {d.whyTurnId && <em>· {turnN(d.whyTurnId)}</em>}</span>
+                <button key={d.id} className={`dir${d.suggested ? " suggested" : ""}`} onClick={() => pick(d)} disabled={floor !== "agent" || !!speaking}>
+                  <span className="l">{d.label}{d.suggested && <span className="rec">Best next step</span>}<span className="src">{d.source === "planner" ? "Planned" : d.source === "flash" ? "Quick" : "Instant"}</span></span>
+                  <span className="say">“{d.say}”</span>
+                  <span className="why">{d.why}{d.whyTurnId && `, ${turnN(d.whyTurnId)}`}</span>
                 </button>
               ))}
             </div>
             {withdrawn.length > 0 && (
               <div className="withdrawn">
-                {withdrawn.map((w, i) => <div key={i}>Withdrawn: <s>{w.label}</s>, {w.reason} {w.turnId && `· ${turnN(w.turnId)}`}</div>)}
+                {withdrawn.map((w, i) => <div key={i}><s>{w.label}</s>: {w.reason}{w.turnId && `, ${turnN(w.turnId)}`}</div>)}
               </div>
             )}
           </section>
 
-          <section className="card">
-            <div className="ch"><h2>Conversation</h2><span className="tag">Captions</span></div>
-            <div className="log">
-              {turns.map((t) => (
-                <div key={t.turnId} className={`turn ${t.speaker}${t.status === "cut" ? " cut" : ""}`}>
-                  <div className="who">{who(t)} <em>turn {t.n}</em>
-                    {speaking === t.turnId && <span className="st speaking">speaking</span>}
-                    {t.status === "cut" && <span className="st cut">cut off by you</span>}
+          <section className="panel">
+            <div className="panel-h"><h2>Conversation</h2><span className="aside">Risk after each caller line</span></div>
+            {turns.length === 0 && <p className="hint">The transcript appears here as people speak.</p>}
+            <div className="line">
+              {turns.map((t) => {
+                const tr = t.speaker === "caller" ? turnRisk[t.turnId] : undefined;
+                return (
+                  <div key={t.turnId} className={`turn ${t.speaker}${t.status === "cut" ? " cut" : ""}`}>
+                    <span className="dot" aria-hidden="true" />
+                    <div>
+                      <div className="who">{who(t)} <em>line {t.n}</em>
+                        {speaking === t.turnId && <span className="st speaking">speaking</span>}
+                        {t.status === "cut" && <span className="st cut">cut off by you</span>}
+                      </div>
+                      <p>{t.text}</p>
+                    </div>
+                    {tr ? <span className={`tick ${lvlClass(tr.level)} num`} title={`Risk after this line: ${tr.level}, score ${tr.score}`}>{tr.locked ? "Confirmed" : tr.level} {tr.score}</span> : <span />}
                   </div>
-                  <p>{t.text}</p>
-                </div>
-              ))}
-              {!liveCaller && nextLine < script.length && live && <div className="turn upcoming"><div className="who">Next scripted line</div><p>{script[nextLine]}</p></div>}
+                );
+              })}
+              {!liveCaller && nextLine < script.length && live && (
+                <div className="turn upcoming"><span className="dot" aria-hidden="true" /><div><div className="who">Next scripted line</div><p>{script[nextLine]}</p></div><span /></div>
+              )}
             </div>
             <div className="free">
-              <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Type a line live…" disabled={!live}
+              <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Type a line…" aria-label="Type a line" disabled={!live}
                 onKeyDown={(e) => e.key === "Enter" && sayTyped("caller")} />
-              <button className="chip" onClick={() => sayTyped("caller")} disabled={!live}>As caller</button>
-              <button className="chip" onClick={() => sayTyped("alex")} disabled={!live || floor === "agent"}>As Alex</button>
+              <button className="chip" onClick={() => sayTyped("caller")} disabled={!live}>Say as caller</button>
+              <button className="chip" onClick={() => sayTyped("alex")} disabled={!live || floor === "agent"}>Say as you</button>
             </div>
           </section>
         </div>
 
         <div>
-          <section className="card">
-            <div className="ch"><h2>Risk</h2><span className="tag">Weights in code</span></div>
-            <div className="risk">
-              <span className={`lvl ${lvlClass}`}>{risk?.locked ? "High risk: confirmed" : risk?.level ?? "Low"}</span>
-              <span className="hint" style={{ margin: 0 }}>score {risk?.score ?? 0}{risk?.provisional ? " · provisional" : ""}</span>
+          <section className="panel">
+            <div className="panel-h"><h2>Risk</h2>{risk?.provisional && <span className="aside">Some signs still being checked</span>}</div>
+            <div className="risk-now">
+              <span className={`lvl ${lvlClass(risk?.level)}`}>{risk?.level ?? "Low"}</span>
+              <span className="score num">score {risk?.score ?? 0}</span>
+              {risk?.locked && <span className="locked">Confirmed scam pattern</span>}
             </div>
-            {signList.length === 0 && <p className="hint">No warning signs so far.</p>}
-            {signList.map((s) => (
-              <div key={s.id} className={`sig ${s.status}`}>
-                <b>{s.weight > 0 ? "+" : ""}{s.weight}</b>
-                <span>{s.label} <em>· {turnN(s.evidenceTurnId)}</em></span>
-                <span className={`chipst ${s.status}`}>{s.status === "confirmed" ? "Neon ✓" : s.status === "removed" ? "removed" : s.source === "rules" ? "instant" : "Hydrogen"}</span>
-              </div>
-            ))}
-            {scenario && <p className="hint" style={{ marginTop: 8 }}>Expected: {scenario.expected.level} · {scenario.expected.verdict}</p>}
+            <div className="track" role="img" aria-label={`Risk score ${risk?.score ?? 0}`}><span className="mark" style={{ left: `${markPos}%` }} /></div>
+            <div className="track-labels"><span>Low</span><span>Medium</span><span>High</span></div>
+            <div className="signs">
+              {signList.length === 0 && <p className="hint" style={{ marginTop: 4 }}>No warning signs so far.</p>}
+              {signList.map((s) => (
+                <div key={s.id} className={`sig ${s.status}`}>
+                  <b>{s.weight > 0 ? "+" : ""}{s.weight}</b>
+                  <span>{s.label} <em>{turnN(s.evidenceTurnId)}</em></span>
+                  <span className={`chipst ${s.status}`}>{s.status === "confirmed" ? "Confirmed" : s.status === "removed" ? "Ruled out" : "Checking"}</span>
+                </div>
+              ))}
+            </div>
+            {scenario && <p className="expected">Expected result: {scenario.expected.level} risk ({scenario.expected.verdict.replace(/^\w+:\s*/, "").toLowerCase()})</p>}
           </section>
 
-          <section className="card">
-            <div className="ch"><h2>Notes</h2><span className="tag">Each fact cites a turn</span></div>
+          <section className="panel">
+            <div className="panel-h"><h2>Notes</h2><span className="aside">Each fact links to its line</span></div>
             {decision && (
-              <div className="decision"><small>Open decision · only you decide</small><b>{decision.text}</b><span className="hint">raised {turnN(decision.evidenceTurnId)}</span></div>
+              <div className="decision"><small>Only you decide</small><b>{decision.text}</b><span className="hint">Raised on {turnN(decision.evidenceTurnId)}</span></div>
             )}
-            {Object.keys(notes).length === 0 && <p className="hint">Neon fills these in a few seconds after each caller line.</p>}
-            {Object.entries(notes).map(([f, n]) => (
-              <div key={f} className="note">
-                <small>{f}</small>
-                <strong>{n.value}</strong> <em className="ev">{turnN(n.turnId)}</em>
-                {n.history.map((h, i) => <span key={i} className="was">was <s>{h.value}</s> · {turnN(h.turnId)}</span>)}
-              </div>
-            ))}
+            {Object.keys(notes).length === 0 && <p className="hint">Who they say they are, what they want, how and by when. Filled in as the caller speaks.</p>}
+            <div className="notes">
+              {Object.entries(notes).map(([f, n]) => (
+                <div key={f} className="note">
+                  <small>{f}</small>
+                  <span>
+                    <strong>{n.value}</strong><em className="ev">{turnN(n.turnId)}</em>
+                    {n.history.map((h, i) => <span key={i} className="was">was <s>{h.value}</s>, {turnN(h.turnId)}</span>)}
+                  </span>
+                </div>
+              ))}
+            </div>
           </section>
         </div>
       </div>
 
       {review && (
-        <section className="card" style={{ marginTop: 14 }}>
-          <div className="ch"><h2>Call review</h2><span className="tag">{review.model} · {review.ms} ms</span></div>
-          <p><b>{review.verdict}</b> · {review.finalLevel}{review.locked ? " (locked)" : ""}. {review.summary}</p>
-          {review.followUps.map((f, i) => <div key={i} className="note">Follow-up: <strong>{f.action}</strong> <span className="was">{f.why}</span></div>)}
-          {review.evals.map((e, i) => <div key={i} className="hint" style={{ margin: 0 }}>{e.pass ? "✓" : "✗"} {e.name}: {e.detail}</div>)}
-        </section>
-      )}
-
-      {review && (
-        <section className="card" style={{ marginTop: 14 }}>
-          <div className="ch">
-            <h2>Critic · what to do better next call</h2>
-            <span className="tag">{critic ? `${critic.report.model} · ${(critic.report.ms / 1000).toFixed(1)} s` : "reviewing…"}</span>
-          </div>
-          <div className="hint" style={{ margin: "0 0 8px" }}>
-            Was this a scam?{" "}
-            {(["scam", "legit", "unknown"] as Label[]).map((l) => (
-              <button key={l} className={critic?.label === l ? "primary" : ""} style={{ marginLeft: 6 }} onClick={() => { setCritic(null); send({ type: "call.label", label: l }); }}>
-                {l === "scam" ? "Yes" : l === "legit" ? "No" : "Not sure"}
-              </button>
-            ))}
-            {critic && <span style={{ marginLeft: 8 }}>label: {critic.label}</span>}
-          </div>
-          {critic && (
-            <>
-              <p>
-                {(["classification", "questioning", "timing", "safety"] as const).map((g) => (
-                  <span key={g} className="tag" style={{ marginRight: 6 }}>{g} {critic.report.grades[g]}/5</span>
-                ))}
-              </p>
-              <p>{critic.report.summary}</p>
-              <div className="hint" style={{ margin: "0 0 8px" }}>
-                Judge (code): {critic.metrics.verdictCorrect === null ? "no label" : critic.metrics.verdictCorrect ? "✓ right verdict" : "✗ wrong verdict"}
-                {" · "}High at caller line {critic.metrics.reachedHighAt ?? "never"}
-                {" · "}first check asked after line {critic.metrics.firstCheckAskedAt ?? "never"}
-                {" · "}money at line {critic.metrics.firstMoneyAt ?? "never"}
-                {critic.metrics.repeatedCategories.length ? ` · repeated: ${critic.metrics.repeatedCategories.join(", ")}` : ""}
+        <article className="report" aria-label="Call report">
+          <header className="report-head">
+            <div>
+              <h2>After the call</h2>
+              <p>{review.summary}</p>
+            </div>
+            <span className={`verdict ${review.verdict}`}>{review.verdict === "scam" ? "Scam" : review.verdict === "legit" ? "Legitimate" : "Unclear"}</span>
+          </header>
+          <div className="report-body">
+            <section>
+              <h3>Next steps for you</h3>
+              {review.followUps.length === 0 && <p className="hint">Nothing to follow up.</p>}
+              {review.followUps.map((f, i) => <div key={i} className="follow">{f.action}<span>{f.why}</span></div>)}
+              <div className="checks">
+                {review.evals.map((e, i) => <div key={i} className={e.pass ? "pass" : "fail"}>{e.name}: {e.detail}</div>)}
               </div>
-              {critic.report.findings.map((f, i) => (
-                <div key={i} className="note">
-                  <small>{f.type.replace(/_/g, " ")} · {f.turns.map(turnN).join(", ")}{f.severity >= 3 ? " · serious" : ""}</small>
-                  <strong>{f.whatHappened}</strong>
-                  {f.shouldHave && <span className="was">Better: {f.shouldHave}</span>}
-                </div>
-              ))}
-              {critic.report.proposed.map((l, i) => (
-                <div key={i} className="hint" style={{ margin: 0 }}>Lesson: when {l.when}: <b>{l.do}</b> <span className="was">{l.action.type}</span></div>
-              ))}
-              {critic.report.rejected.map((r, i) => <div key={i} className="hint" style={{ margin: 0 }}>✗ refused: {r}</div>)}
-            </>
-          )}
+            </section>
+            <section>
+              <h3>How the assistant did</h3>
+              <div className="ask">
+                Was this a scam?
+                {(["scam", "legit", "unknown"] as Label[]).map((l) => (
+                  <button key={l} className={`chip${critic?.label === l ? " on" : ""}`} onClick={() => { setCritic(null); send({ type: "call.label", label: l }); }}>
+                    {l === "scam" ? "Yes" : l === "legit" ? "No" : "Not sure"}
+                  </button>
+                ))}
+              </div>
+              {!critic && <span className="pending">The critic is reviewing the call</span>}
+              {critic && (
+                <>
+                  <div className="grades">
+                    {(Object.keys(GRADE) as (keyof typeof GRADE)[]).map((g) => (
+                      <div key={g} className="grade"><small>{GRADE[g]}</small><b className="num">{critic.report.grades[g]}<span>/5</span></b></div>
+                    ))}
+                  </div>
+                  <p style={{ marginBottom: 10 }}>{critic.report.summary}</p>
+                  <p className="judge">
+                    {critic.metrics.verdictCorrect === null ? "No label yet." : critic.metrics.verdictCorrect ? "Right verdict." : "Wrong verdict."}
+                    {" "}Reached High {critic.metrics.reachedHighAt ? `on caller line ${critic.metrics.reachedHighAt}` : "never"};
+                    {" "}first identity check {critic.metrics.firstCheckAskedAt ? `after caller line ${critic.metrics.firstCheckAskedAt}` : "never asked"};
+                    {" "}money came up {critic.metrics.firstMoneyAt ? `on caller line ${critic.metrics.firstMoneyAt}` : "never"}.
+                    {critic.metrics.repeatedCategories.length ? ` Repeated: ${critic.metrics.repeatedCategories.join(", ").replace(/_/g, " ")}.` : ""}
+                  </p>
+                  {critic.report.findings.map((f, i) => (
+                    <div key={i} className="finding">
+                      <small className={f.severity >= 3 ? "serious" : ""}>{f.type.replace(/_/g, " ")}, {f.turns.map(turnN).join(", ")}</small>
+                      <span>{f.whatHappened}</span>
+                      {f.shouldHave && <span className="better">Better: {f.shouldHave}</span>}
+                    </div>
+                  ))}
+                  {critic.report.proposed.map((l, i) => (
+                    <div key={i} className="lesson"><small>Lesson for next time</small>When {l.when.replace(/\.$/, "")}: {l.do}</div>
+                  ))}
+                  {critic.report.rejected.map((r, i) => <div key={i} className="refused">Refused lesson: {r}</div>)}
+                </>
+              )}
+            </section>
+          </div>
           {playbook && (
-            <div className="hint" style={{ marginTop: 8 }}>
-              Playbook v{playbook.update.fromVersion} → v{playbook.version}
-              {playbook.update.added.length ? ` · added ${playbook.update.added.join(", ")}` : ""}
-              {playbook.update.reinforced.length ? ` · reinforced ${[...new Set(playbook.update.reinforced)].join(", ")}` : ""}
-              {playbook.update.promoted.length ? ` · promoted ${playbook.update.promoted.join(", ")}` : ""}
-              {" · "}{playbook.active.length} active lessons, used from the next call on.
+            <div className="pbook">
+              Playbook updated from v{playbook.update.fromVersion} to v{playbook.version}
+              {playbook.update.added.length ? `, added ${playbook.update.added.join(", ")}` : ""}
+              {playbook.update.reinforced.length ? `, reinforced ${[...new Set(playbook.update.reinforced)].join(", ")}` : ""}
+              {playbook.update.promoted.length ? `, promoted ${playbook.update.promoted.join(", ")}` : ""}.
+              {" "}{playbook.active.length} active lessons apply from the next call.
             </div>
           )}
-        </section>
+        </article>
       )}
 
-      <details style={{ marginTop: 14 }}>
-        <summary className="hint">Event stream ({events.length})</summary>
+      <details className="diag">
+        <summary>Diagnostics</summary>
+        <div className="hud">
+          <span>Server <b>{ws}</b></span>
+          {(Object.keys(LANE_LABEL) as (keyof typeof LANE_LABEL)[]).map((l) => (
+            <span key={l} title={lanes[l]?.note}>{LANE_LABEL[l]} ({LANE_NAMES[l]}) <b className={lanes[l] && !lanes[l]!.ok ? "bad" : ""}>{lanes[l] ? `${lanes[l]!.ms} ms` : "–"}</b></span>
+          ))}
+          <span>Taps accepted <b>{m.accepted}</b></span>
+          <span>Taps rejected <b>{m.rejected}</b></span>
+          <span>Cut-offs <b>{m.cuts}</b></span>
+          <span>Tap to audio <b>{m.tapToAudio == null ? "–" : `${m.tapToAudio} ms`}</b></span>
+          <span>Take back silence <b>{m.takeback == null ? "–" : `${m.takeback} ms`}</b></span>
+        </div>
         <pre className="events">{events.join("\n")}</pre>
       </details>
-      {toast && <div className="toast">{toast}</div>}
+      {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
 }

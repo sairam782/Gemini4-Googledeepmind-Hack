@@ -240,7 +240,7 @@ export function AlexPage({ callId }: { callId: string }) {
         <button className="btn ghost" onClick={endCall} disabled={f === "ended"}>End call</button>
       </div>
 
-      <div className="hud">
+      <div className="hud inline">
         <span>Server <b>{ws}</b></span>
         <span>Audio link <b>{rtc}</b></span>
         <span>Caller <b>{callerHere ? "connected" : "waiting"}</b></span>

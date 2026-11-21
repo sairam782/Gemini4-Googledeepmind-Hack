@@ -120,6 +120,8 @@ Learning data uses local JSON files under `server/data/learning/` by default. Se
 ### Supabase setup
 
 1. In a Supabase project, open **Connect** and copy the **Session pooler** Postgres URI into `SUPABASE_DB_URL` in the server's root `.env`. Use the database password in the URI and keep it on the server.
+   Or put `SUPABASE_PROJECT_REF` and `SUPABASE_DB_PASSWORD` in `.env` and run `npx tsx --env-file=../.env scripts/find-supabase.ts` from `server/`: it finds your project's pooler host and writes `SUPABASE_DB_URL` for you.
+   Connections are verified against Supabase's own certificate authority. Download it from Project Settings → Database → SSL configuration and save it as `supabase/prod-ca-2021.crt` (a public certificate, safe to commit). On a hosting platform you can instead set `SUPABASE_CA_CERT` to the certificate's text or a file path.
 2. From the repository root, create the learning tables and optionally seed an empty database from the existing local history:
 
    ```bash

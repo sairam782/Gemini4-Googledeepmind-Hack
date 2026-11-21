@@ -1,5 +1,19 @@
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
+
+/**
+ * Supabase signs its Postgres certificates with its own root CA, which Node doesn't trust out of the box.
+ * Full verification needs that CA: Project Settings → Database → SSL configuration → Download certificate.
+ * SUPABASE_CA_CERT may be a file path or the PEM itself (handy on hosting platforms); otherwise the
+ * certificate committed at supabase/prod-ca-2021.crt is used. Verification is never switched off.
+ */
+function supabaseCa(): string | undefined {
+  const v = process.env.SUPABASE_CA_CERT?.trim();
+  if (v) return v.includes("BEGIN CERTIFICATE") ? v.replace(/\\n/g, "\n") : readFileSync(v, "utf8");
+  const bundled = fileURLToPath(new URL("../../../supabase/prod-ca-2021.crt", import.meta.url));
+  return existsSync(bundled) ? readFileSync(bundled, "utf8") : undefined;
+}
 import { EMPTY_PLAYBOOK } from "./playbook.ts";
 import type { LearningStore, StoredCall } from "./store.ts";
 import type { Playbook } from "./types.ts";
@@ -17,7 +31,7 @@ export class SupabaseStore implements LearningStore {
     }
     const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
     this.sql = postgres(connectionString, {
-      ssl: local && url.searchParams.get("sslmode") === "disable" ? false : "verify-full",
+      ssl: local && url.searchParams.get("sslmode") === "disable" ? false : ((ca) => (ca ? { ca, rejectUnauthorized: true } : "verify-full"))(supabaseCa()),
       prepare: false,
       max: 5,
       connect_timeout: 5,

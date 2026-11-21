@@ -19,7 +19,7 @@ const rooms = new Map<string, CallRoom>();
 const http = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/api/health") {
-      return json(res, 200, { ok: true, tts: ttsEnabled(), rooms: rooms.size, calls: [...calls.keys()] });
+      return json(res, 200, { ok: true, tts: ttsEnabled(), rooms: rooms.size, calls: [...calls.keys()], learning: process.env.SUPABASE_DB_URL ? "supabase" : "files" });
     }
     // Twilio voice webhook → TwiML that streams the call to /twilio.
     if (req.method === "POST" && req.url?.startsWith("/twilio/voice")) {
@@ -62,6 +62,17 @@ const http = createServer(async (req, res) => {
         return json(res, r.error ? 400 : 202, r);
       }
       if (req.method === "GET" && req.url === "/api/dev/runs") return json(res, 200, listRuns());
+      // Where the review phase is storing things right now, and whether it answers.
+      if (req.method === "GET" && req.url === "/api/dev/learning") {
+        const { learningStore } = await import("./learn/store.ts");
+        const store = learningStore();
+        try {
+          const [pb, stored] = await Promise.all([store.currentPlaybook(), store.calls()]);
+          return json(res, 200, { backend: process.env.SUPABASE_DB_URL ? "supabase" : "files", playbookVersion: pb.version, activeLessons: pb.lessons.filter((l) => l.status === "active").length, calls: stored.length });
+        } catch (e) {
+          return json(res, 500, { backend: process.env.SUPABASE_DB_URL ? "supabase" : "files", error: String((e as Error).message || e) });
+        }
+      }
       const m = req.method === "GET" && /^\/api\/dev\/runs\/([\w.-]+)$/.exec(req.url);
       if (m) {
         const st = runStatus(m[1]);

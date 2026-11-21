@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
  * so a run can be kicked off from the browser (the desk) and read back later.
  * Only localhost may call it, only these scripts, only simple flags. DEV_RUNNER=0 turns it off.
  */
-const SCRIPTS = new Set(["probe-models.ts", "test-learn.ts", "learn.ts", "replay.ts"]);
+const SCRIPTS = new Set(["probe-models.ts", "test-learn.ts", "learn.ts", "replay.ts", "learning-db.ts", "find-supabase.ts"]);
 const serverDir = fileURLToPath(new URL("..", import.meta.url));
 const logDir = join(serverDir, "data", "learning", "runs");
 const runs = new Map<string, { script: string; args: string[]; startedAt: string; done: boolean; code: number | null; log: string }>();
@@ -26,7 +26,9 @@ export function startRun(script: string, args: unknown): { id?: string; error?: 
   const out = createWriteStream(log);
   // The test script stays offline on purpose (no key); the others get the .env.
   const env = script === "test-learn.ts" ? { ...process.env, GEMINI_API_KEY: "" } : process.env;
-  const child = spawn(process.execPath, ["--import", "tsx", join("scripts", script), ...list], { cwd: serverDir, env });
+  // Re-read ../.env for every run, so a value added after the server started is picked up.
+  // (Variables already set in the environment win, which keeps the test script's blank key blank.)
+  const child = spawn(process.execPath, ["--env-file-if-exists=../.env", "--import", "tsx", join("scripts", script), ...list], { cwd: serverDir, env });
   const run = { script, args: list, startedAt: new Date().toISOString(), done: false, code: null as number | null, log };
   runs.set(id, run);
   child.stdout.pipe(out, { end: false });
