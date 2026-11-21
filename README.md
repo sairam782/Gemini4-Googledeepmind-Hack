@@ -104,9 +104,11 @@ flowchart LR
 
 ```bash
 cp .env.example .env      # add your GEMINI_API_KEY
-npm install
-npm run dev               # server on :8787, desk on :5173
+npm install --prefix server && npm install --prefix web
+npm run dev:agent         # server on :8787, desk on :5173
 ```
+
+The repo root is the phone app (see [Phone app](#phone-app)), so `server/` and `web/` install on their own.
 
 Open **http://localhost:5173/desk** in Chrome.
 
