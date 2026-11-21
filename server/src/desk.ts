@@ -55,6 +55,12 @@ export class DeskSession {
       case "call.end":
         if (!this.call) return this.send({ type: "action.rejected", actionId: m.actionId, revision: m.revision, reason: "no call" });
         return this.call.control(m);
+      case "followup.approve":
+        if (!this.call) return this.send({ type: "followup.result", followupId: m.followupId, ok: false, detail: "no call" });
+        return this.call.approveFollowUp(m.actionId, m.followupId);
+      case "followup.dismiss":
+        if (!this.call) return this.send({ type: "followup.result", followupId: m.followupId, ok: false, detail: "no call" });
+        return this.call.dismissFollowUp(m.followupId);
     }
   }
 
