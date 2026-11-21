@@ -6,6 +6,12 @@ import type { StoredCall } from "./store.ts";
 
 export const CATEGORIES: DirectionCategory[] = ["verify_identity", "offer_callback", "probe_details", "slow_down", "decline"];
 export const MAX_ACTIVE = 10;
+export const EMPTY_PLAYBOOK: Playbook = {
+  version: 0,
+  updatedAt: new Date(0).toISOString(),
+  lessons: [],
+  changelog: [{ version: 0, at: new Date(0).toISOString(), note: "empty playbook" }],
+};
 const MAX_WEIGHT_SHIFT = 2;
 
 /**

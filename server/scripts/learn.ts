@@ -36,7 +36,7 @@ const store = learningStore();
 // ---------------------------------------------------------------- one-off commands
 
 if (flag("show")) {
-  const pb = store.currentPlaybook();
+  const pb = await store.currentPlaybook();
   console.log(`playbook v${pb.version} (${pb.updatedAt})`);
   for (const l of pb.lessons) console.log(`  ${l.id} [${l.status}] seen ${l.seen} sev ${l.severity}: when ${l.when}: ${l.do}  ${JSON.stringify(l.action)}`);
   pb.changelog.forEach((c) => console.log(`  v${c.version} ${c.at.slice(0, 19)} ${c.note}`));
@@ -44,11 +44,11 @@ if (flag("show")) {
 }
 if (args.includes("--rollback")) {
   const v = Number(opt("rollback", "-1"));
-  store.setCurrent(v);
+  await store.setCurrent(v);
   console.log(`current playbook is now v${v}`);
   process.exit(0);
 }
-if (flag("fresh")) store.setCurrent(0);
+if (flag("fresh")) await store.setCurrent(0);
 
 // ---------------------------------------------------------------- helpers
 
@@ -136,7 +136,7 @@ function worse(now: Summary, before: Summary): string | null {
 
 const train = PERSONAS.filter((p) => p.set === "train");
 const holdout = PERSONAS.filter((p) => p.set === "holdout");
-const start = store.currentPlaybook();
+const start = await store.currentPlaybook();
 console.log(`Learning rounds: ${ROUNDS} · critic ${CRITIC_MODEL} · caller ${SIM_CALLER_MODEL} · ${train.length} train + ${holdout.length} held-out personas · starting at playbook v${start.version}\n`);
 
 const table: { round: number; playbook: number; kept: boolean; note: string; holdout: Summary; train?: Summary }[] = [];
@@ -151,7 +151,7 @@ let baseline = summarize(base0);
 table.push({ round: 0, playbook: start.version, kept: true, note: "baseline", holdout: baseline });
 
 for (let round = 1; round <= ROUNDS; round++) {
-  const pb = store.currentPlaybook();
+  const pb = await store.currentPlaybook();
   console.log(`\nRound ${round}: train with playbook v${pb.version}`);
   const trainRes = await pool(train, CONCURRENCY, (p) => runCall(p, activate(pb), round));
 
@@ -167,7 +167,9 @@ for (let round = 1; round <= ROUNDS; round++) {
   const hold = summarize(await pool(holdout, CONCURRENCY, (p) => runCall(p, activate(cand), round)));
   const why = worse(hold, baseline);
   if (why) {
-    store.setCurrent(pb.version);
+    if (!(await store.setCurrent(pb.version, cand.version))) {
+      throw new Error(`Cannot roll back v${cand.version}: a newer playbook was already made current`);
+    }
     console.log(`  ROLLED BACK to v${pb.version}: ${why}`);
   } else {
     baseline = hold;
@@ -186,10 +188,10 @@ for (const r of table) {
     `${String(r.round).padEnd(7)}v${String(r.playbook).padEnd(9)}${(r.kept ? "yes" : "no").padEnd(6)}${h.scamsCaught.padEnd(7)}${String(h.falseAlarms).padEnd(14)}${String(h.avgHighAtScam ?? "-").padEnd(14)}${h.checkBeforeMoney.padEnd(20)}${String(h.avgCheckAt ?? "-").padEnd(8)}${String(h.avgQuestioning).padEnd(13)}${String(h.avgTiming).padEnd(8)}${String(h.avgClassification).padEnd(16)}${r.note}`,
   );
 }
-const final = store.currentPlaybook();
+const final = await store.currentPlaybook();
 console.log(`\nCurrent playbook: v${final.version}, ${final.lessons.filter((l) => l.status === "active").length} active lessons`);
 for (const l of final.lessons.filter((x) => x.status === "active")) console.log(`  ${l.id} (seen ${l.seen}): when ${l.when}: ${l.do}`);
 const name = `learn-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-store.saveRun(name, { at: new Date().toISOString(), critic: CRITIC_MODEL, caller: SIM_CALLER_MODEL, rounds: table, playbook: final.version });
-console.log(`\nSaved server/data/learning/runs/${name}.json`);
+await store.saveRun(name, { at: new Date().toISOString(), critic: CRITIC_MODEL, caller: SIM_CALLER_MODEL, rounds: table, playbook: final.version });
+console.log(`\nSaved eval results as ${name}`);
 process.exit(0);

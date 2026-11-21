@@ -71,7 +71,7 @@ export class DeskSession {
     this.send({ type: "call.started", callId: call.id, scenario: scenarioInfo(sc), script: sc.script });
     this.attach(call);
     call.state();
-    call.brain.addTurn("alex", "Hello?");
+    call.alex("Hello?");
   }
 
   private next() {

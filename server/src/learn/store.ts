@@ -1,7 +1,11 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, existsSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EMPTY_PLAYBOOK } from "./playbook.ts";
+import { SupabaseStore } from "./supabase.ts";
 import type { CallRecord, CriticReport, JudgeMetrics, Playbook } from "./types.ts";
+
+export { EMPTY_PLAYBOOK };
 
 /** One reviewed call as it's stored: what happened, the numbers, and the critic's notes. */
 export interface StoredCall {
@@ -10,23 +14,21 @@ export interface StoredCall {
   critic: CriticReport | null;
 }
 
-/**
- * Where the review phase keeps its memory. Today: JSON files under server/data/learning.
- * The interface is the seam for a database later (e.g. Supabase Postgres): swap the class, keep the calls.
- */
-export interface LearningStore {
-  currentPlaybook(): Playbook;
-  playbook(version: number): Playbook | null;
-  /** Saves a new version and makes it current. */
-  savePlaybook(pb: Playbook): void;
-  /** Point "current" at an older version (rollback). */
-  setCurrent(version: number): void;
-  saveCall(c: StoredCall): void;
-  calls(): StoredCall[];
-  saveRun(name: string, data: unknown): void;
-}
+type StoreResult<T> = T | Promise<T>;
 
-export const EMPTY_PLAYBOOK: Playbook = { version: 0, updatedAt: new Date(0).toISOString(), lessons: [], changelog: [{ version: 0, at: new Date(0).toISOString(), note: "empty playbook" }] };
+/** The file backend is synchronous. The Supabase backend performs the same operations over SQL. */
+export interface LearningStore {
+  currentPlaybook(): StoreResult<Playbook>;
+  playbook(version: number): StoreResult<Playbook | null>;
+  latestVersion(): StoreResult<number>;
+  /** Publish a version only if its base is still current. */
+  savePlaybook(pb: Playbook, expectedVersion: number): StoreResult<boolean>;
+  /** Point current at an older version, optionally checking the current version first. */
+  setCurrent(version: number, expectedVersion?: number): StoreResult<boolean>;
+  saveCall(c: StoredCall): StoreResult<void>;
+  calls(): StoreResult<StoredCall[]>;
+  saveRun(name: string, data: unknown): StoreResult<void>;
+}
 
 export class FileStore implements LearningStore {
   constructor(readonly dir: string) {
@@ -62,22 +64,30 @@ export class FileStore implements LearningStore {
     return this.read<Playbook>(this.pbPath(version));
   }
 
-  savePlaybook(pb: Playbook) {
+  savePlaybook(pb: Playbook, expectedVersion: number) {
+    if (this.currentPlaybook().version !== expectedVersion || existsSync(this.pbPath(pb.version))) return false;
     this.write(this.pbPath(pb.version), pb);
-    this.setCurrent(pb.version);
+    return this.setCurrent(pb.version);
   }
 
-  setCurrent(version: number) {
+  setCurrent(version: number, expectedVersion?: number) {
+    if (expectedVersion !== undefined && this.currentPlaybook().version !== expectedVersion) return false;
     if (version !== 0 && !existsSync(this.pbPath(version))) throw new Error(`no playbook v${version}`);
     this.write(join(this.dir, "playbook", "current.json"), { version });
+    return true;
+  }
+
+  private versions(): number[] {
+    return readdirSync(join(this.dir, "playbook"))
+      .flatMap((file) => {
+        const match = /^v(\d+)\.json$/.exec(file);
+        return match ? [Number(match[1])] : [];
+      });
   }
 
   /** Highest version on disk, so a rejected candidate never reuses a number. */
   latestVersion(): number {
-    return readdirSync(join(this.dir, "playbook"))
-      .map((f) => /^v(\d+)\.json$/.exec(f)?.[1])
-      .filter(Boolean)
-      .reduce((m, v) => Math.max(m, Number(v)), 0);
+    return this.versions().reduce((latest, version) => Math.max(latest, version), 0);
   }
 
   saveCall(c: StoredCall) {
@@ -95,8 +105,25 @@ export class FileStore implements LearningStore {
   saveRun(name: string, data: unknown) {
     this.write(join(this.dir, "runs", `${name.replace(/[^\w.-]/g, "_")}.json`), data);
   }
+
+  history() {
+    const playbooks = this.versions().map((version) => {
+      const playbook = this.playbook(version);
+      if (!playbook || playbook.version !== version) throw new Error(`Invalid local playbook v${version}`);
+      return playbook;
+    });
+    const dir = join(this.dir, "runs");
+    const runs = readdirSync(dir)
+      .filter((file) => file.endsWith(".json"))
+      .map((file) => ({ name: file.slice(0, -5), data: JSON.parse(readFileSync(join(dir, file), "utf8")) as unknown }));
+    return { currentVersion: this.currentPlaybook().version, playbooks, calls: this.calls(), runs };
+  }
 }
 
-const defaultDir = process.env.LEARNING_DIR || fileURLToPath(new URL("../../data/learning/", import.meta.url));
-let store: FileStore | null = null;
-export const learningStore = (): FileStore => (store ??= new FileStore(defaultDir));
+export const localLearningDir = process.env.LEARNING_DIR || fileURLToPath(new URL("../../data/learning/", import.meta.url));
+let store: LearningStore | null = null;
+
+export function learningStore(): LearningStore {
+  const url = process.env.SUPABASE_DB_URL;
+  return (store ??= url ? new SupabaseStore(url) : new FileStore(localLearningDir));
+}

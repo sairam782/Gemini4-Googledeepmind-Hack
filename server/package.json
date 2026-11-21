@@ -7,10 +7,12 @@
     "start": "tsx --env-file-if-exists=../.env src/index.ts",
     "typecheck": "tsc --noEmit",
     "learn": "tsx --env-file-if-exists=../.env scripts/learn.ts",
-    "test:learn": "tsx scripts/test-learn.ts"
+    "test:learn": "tsx scripts/test-learn.ts",
+    "learning-db": "node --import tsx --env-file-if-exists=../.env scripts/learning-db.ts"
   },
   "dependencies": {
     "@google/genai": "^1.30.0",
+    "postgres": "^3.4.9",
     "ws": "^8.18.0"
   },
   "devDependencies": {

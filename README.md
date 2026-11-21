@@ -103,7 +103,22 @@ npm run learn -- --rollback 2               # make v2 current again
 
 `learn` runs simulated callers (`personas.ts`) that answer what the agent actually asks, with autopilot-Alex tapping the Suggested card, so a better question at a better time changes the call. Train personas feed the critic; held-out personas are only scored. A round's playbook is rolled back if held-out calls get a new false alarm, catch fewer scams, leak anything or get worse questioning grades.
 
-Storage is JSON files under `server/data/learning/` (git-ignored) behind the `LearningStore` interface in `store.ts`, so a database can replace it without touching the rest.
+Learning data uses local JSON files under `server/data/learning/` by default. Set `SUPABASE_DB_URL` to share call reviews, playbook versions and eval results through Supabase Postgres. Each new call reads the current version and uses it for the duration of that call.
+
+### Supabase setup
+
+1. In a Supabase project, open **Connect** and copy the **Session pooler** Postgres URI into `SUPABASE_DB_URL` in the server's root `.env`. Use the database password in the URI and keep it on the server.
+2. From the repository root, create the learning tables and optionally seed an empty database from the existing local history:
+
+   ```bash
+   npm run learning-db -w server -- migrate
+   npm run learning-db -w server -- import
+   npm run learn -w server -- --show
+   ```
+
+3. Restart the server with the same environment. It will store new reviews in Supabase and load feedback from there at the start of each call.
+
+The import copies reviewed calls, every saved playbook, the current version, and JSON eval reports. It runs as one transaction and requires an empty learning database, so it cannot replace existing shared history. The tables live in the private `revoice` schema and the browser talks to the app server.
 
 ## Phone (Twilio)
 

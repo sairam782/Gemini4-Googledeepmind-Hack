@@ -58,6 +58,7 @@ export class LiveCall {
   readonly ctx: CallContext;
   private meta: CallMeta;
   private learning: Promise<void> | null = null;
+  private loadingPlaybook?: Promise<void>;
 
   constructor(
     readonly id: string,
@@ -66,7 +67,19 @@ export class LiveCall {
     meta: CallMeta = { source: "phone" },
   ) {
     // Each call starts from the current playbook, unless the caller (an eval run) chose one.
-    this.ctx = { ...ctx, playbook: ctx.playbook ?? (learningOn() ? playbookForNextCall() : undefined) };
+    this.ctx = { ...ctx };
+    const playbook = ctx.playbook ?? (learningOn() ? playbookForNextCall() : undefined);
+    if (playbook instanceof Promise) {
+      this.loadingPlaybook = playbook
+        .then((loaded) => { this.ctx.playbook = loaded; })
+        .catch((error) => {
+          console.error("[learn] could not load playbook:", (error as Error).message);
+          this.emit({ type: "error", message: "Could not load the playbook. This call will use default rules." });
+        })
+        .finally(() => { this.loadingPlaybook = undefined; });
+    } else {
+      this.ctx.playbook = playbook;
+    }
     this.meta = { ...meta, label: meta.label ?? (expected ? (expected.level === "High" ? "scam" : "legit") : "unknown"), labelSource: meta.labelSource ?? (expected ? "scenario" : "none") };
     this.brain = new CallBrain(this.ctx, (m) => this.emit(m), () => this.revision);
     this.brain.holdUpgrades = () => this.floor === "agent";
@@ -102,15 +115,24 @@ export class LiveCall {
     return this.floor === "ended";
   }
 
+  // Preserve the order of input while Supabase loads the call's playbook.
+  private deferUntilPlaybook(action: () => void): boolean {
+    if (!this.loadingPlaybook) return false;
+    void this.loadingPlaybook.then(action).catch((error) => console.error("[call]", error));
+    return true;
+  }
+
   // ---------------------------------------------------------------- inputs
 
   caller(text: string) {
+    if (this.deferUntilPlaybook(() => this.caller(text))) return;
     if (this.ended || !text.trim()) return;
     this.brain.addTurn("caller", text.trim().slice(0, 500));
   }
 
   /** Alex speaking. From the desk it's refused while the agent has the floor; on a phone, Alex's voice wins. */
   alex(text: string, from: "desk" | "phone" = "desk") {
+    if (this.deferUntilPlaybook(() => this.alex(text, from))) return;
     if (this.ended || !text.trim()) return;
     if (this.floor === "agent") {
       if (from === "desk") return this.emit({ type: "error", message: "Alex's mic is muted while the agent has the floor. Take back first." });
@@ -134,6 +156,7 @@ export class LiveCall {
   // ---------------------------------------------------------------- Alex's taps
 
   control(m: ControlMsg) {
+    if (this.deferUntilPlaybook(() => this.control(m))) return;
     const reject = (reason: string) => this.emit({ type: "action.rejected", actionId: m.actionId, revision: m.revision, reason });
     if (this.consumed.has(m.actionId)) return reject("duplicate");
     const alwaysAllowed = m.type === "control.takeback" || m.type === "call.end";
@@ -203,6 +226,7 @@ export class LiveCall {
   // ---------------------------------------------------------------- hang-up and review
 
   end(reason: string) {
+    if (this.deferUntilPlaybook(() => this.end(reason))) return;
     if (this.ended) return;
     if (this.speaking) {
       this.voice?.cut(this.speaking);
