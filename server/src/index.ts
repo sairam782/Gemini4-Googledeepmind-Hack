@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMsg, Role } from "../../shared/protocol.ts";
 import { CallRoom } from "./room.ts";
-import { renderSpeech, ttsEnabled } from "./tts.ts";
+import { renderSpeech, STREAM_RATE, streamSpeech, ttsEnabled } from "./tts.ts";
 import { DeskSession } from "./desk.ts";
 import { calls, findCall } from "./call.ts";
 import { handleTwilioStream, twiml } from "./twilio.ts";
@@ -108,6 +108,24 @@ const http = createServer(async (req, res) => {
       const wav = await renderSpeech(text, voice);
       res.writeHead(200, { "content-type": "audio/wav", "x-render-ms": String(Date.now() - t0) });
       return res.end(wav);
+    }
+    if (req.method === "POST" && req.url === "/api/tts/stream") {
+      const { text, voice } = JSON.parse(await body(req)) as { text?: string; voice?: string };
+      if (!text || text.length > 600) return json(res, 400, { error: "text required (max 600 chars)" });
+      if (!ttsEnabled()) return json(res, 503, { error: "TTS disabled: set GEMINI_API_KEY in .env" });
+      let started = false;
+      try {
+        await streamSpeech(text, voice, (pcm) => {
+          if (!started) {
+            started = true;
+            res.writeHead(200, { "content-type": `audio/l16; rate=${STREAM_RATE}`, "x-sample-rate": String(STREAM_RATE), "cache-control": "no-store" });
+          }
+          if (!res.destroyed) res.write(pcm);
+        });
+      } catch (e) {
+        if (!started) return json(res, 502, { error: (e as Error).message });
+      }
+      return res.end();
     }
     if (serveWeb(req, res)) return;
     json(res, 404, { error: "not found" });

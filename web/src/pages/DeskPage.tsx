@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+const ACKS = ["Mm-hm.", "Okay.", "I see.", "Right."]; // the server's backchannels (call.ts ACKS), pre-rendered
 import type {
   CallReview, DeskClientMsg, DeskServerMsg, Direction, Floor, Lane, RiskLevel, ScenarioInfo, Sign, Turn,
 } from "../../../shared/brain.ts";
@@ -67,8 +68,10 @@ export function DeskPage() {
 
   const sock = useRef<WebSocket | null>(null);
   const voice = useRef<VoicePlayer | null>(null);
-  const refs = useRef({ voiceOn, auto, revision, floor, nextLine, total: 0, tapAt: 0, speaking: null as string | null });
-  refs.current = { ...refs.current, voiceOn, auto, revision, floor, nextLine, total: script.length, speaking };
+  const callId = useRef<string | null>(null);
+  const agentTurn = useRef<string | null>(null);
+  const refs = useRef({ voiceOn, auto, floor, nextLine, total: 0, tapAt: 0 });
+  refs.current = { ...refs.current, voiceOn, auto, floor, nextLine, total: script.length };
 
   const send = (msg: DeskClientMsg) => sock.current?.readyState === WebSocket.OPEN && sock.current.send(JSON.stringify(msg));
   const flash = (t: string) => {
@@ -76,31 +79,59 @@ export function DeskPage() {
     setTimeout(() => setToast(null), 2500);
   };
 
+  function stopAgent() {
+    agentTurn.current = null;
+    setSpeaking(null);
+    return voice.current?.stop() ?? 0;
+  }
+
+  function clearCallControls() {
+    callId.current = null;
+    stopAgent();
+    setFloor("ended");
+    setRevision(0);
+    setNextLine(0);
+    setDirs([]);
+    setAutoAt(null);
+    setInterim("");
+    refs.current.tapAt = 0;
+  }
+
   // ---- socket
   useEffect(() => {
     let closed = false;
+    let reconnect: ReturnType<typeof setTimeout> | undefined;
     const connect = () => {
       setWs("connecting");
       const s = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
       sock.current = s;
       s.onopen = () => {
+        if (closed || sock.current !== s) return;
         setWs("open");
         s.send(JSON.stringify({ type: "join", role: "desk", callId: "desk" }));
       };
-      s.onmessage = (e) => onMsg(JSON.parse(e.data));
+      s.onmessage = (e) => {
+        if (!closed && sock.current === s) onMsg(JSON.parse(e.data));
+      };
       s.onclose = () => {
+        if (closed || sock.current !== s) return;
+        sock.current = null;
         setWs("closed");
-        // The server ended the call with the socket; stop listening and talking here too.
+        // A desk call belongs to the closed socket. The next socket starts without a call.
         stopMics();
-        voice.current?.stop();
-        setSpeaking(null); setAutoAt(null); setInterim("");
-        if (!closed) setTimeout(connect, 1000);
+        clearCallControls();
+        reconnect = setTimeout(connect, 1000);
       };
     };
     connect();
     return () => {
       closed = true;
+      clearTimeout(reconnect);
+      callId.current = null;
+      agentTurn.current = null;
+      voice.current?.stop();
       sock.current?.close();
+      sock.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -116,14 +147,16 @@ export function DeskPage() {
         setScenarios(msg.scenarios);
         break;
       case "call.started":
+        clearCallControls();
+        callId.current = msg.callId;
         setScenario(msg.scenario);
         setScript(msg.script);
         setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null); setCritic(null); setPlaybook(null); setMyLabel(null); setTurnRisk({}); lastCaller.current = null;
         setM({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null, takeback: null });
-        setInterim(""); setSpeaking(null); setAutoAt(null);
         micStop.current?.(); micStop.current = micNext.current; micNext.current = null;
-        if (refs.current.voiceOn) msg.script.forEach((l) => void player().clip(l, CALLER_VOICE).catch(() => {}));
+        if (refs.current.voiceOn && callMode.current === "script") msg.script.forEach((l) => void player().clip(l, CALLER_VOICE).catch(() => {}));
         void player().clip("Hi, this is Alex's AI assistant. Alex is listening in.", AGENT_VOICE).catch(() => {});
+        ACKS.forEach((a) => void player().clip(a, AGENT_VOICE).catch(() => {}));
         break;
       case "state":
         setFloor(msg.floor); setRevision(msg.revision); setNextLine(msg.nextLine);
@@ -133,9 +166,16 @@ export function DeskPage() {
         if (msg.turn.speaker === "caller") { lastCaller.current = msg.turn.turnId; setInterim(""); }
         if (msg.turn.speaker === "caller" && callMode.current !== "mic") {
           // Tell the server when the caller's line has been heard; the auto-speak clock starts there.
-          const done = () => send({ type: "desk.callerDone", turnId: msg.turn.turnId });
+          const id = callId.current;
+          const done = () => {
+            if (id !== null && callId.current === id) send({ type: "desk.callerDone", turnId: msg.turn.turnId });
+          };
           const wait = () => new Promise((r) => setTimeout(r, Math.min(4000, msg.turn.text.length * 55)));
-          if (refs.current.voiceOn) void player().clip(msg.turn.text, CALLER_VOICE).then((b) => player().play(b)).catch(wait).then(done);
+          if (refs.current.voiceOn) {
+            // Streamed like the agent, so the caller answers ~1 s after it's their turn, not 3-5 s.
+            void (id !== null && callId.current === id ? player().speak(msg.turn.text, CALLER_VOICE) : Promise.resolve())
+              .catch(wait).then(done);
+          }
           else void wait().then(done);
         }
         break;
@@ -150,8 +190,11 @@ export function DeskPage() {
       case "caption.interim":
         if (msg.speaker === "caller") setInterim(msg.text);
         break;
+      case "agent.ack":
+        if (refs.current.voiceOn) void player().blip(msg.text, AGENT_VOICE);
+        break;
       case "agent.cut":
-        if (refs.current.speaking === msg.turnId) voice.current?.stop(); // you talked over the agent
+        if (agentTurn.current === msg.turnId) stopAgent();
         setTurns((t) => t.map((x) => (x.turnId === msg.turnId ? { ...x, status: "cut" } : x)));
         break;
       case "risk.signal":
@@ -175,6 +218,11 @@ export function DeskPage() {
         break;
       case "directions":
         setDirs(msg.directions);
+        // Render the likeliest auto line now, so it plays the moment the agent picks it.
+        if (refs.current.voiceOn && msg.directions.length) {
+          const best = [...msg.directions].sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))[0];
+          void player().clip(best.say, AGENT_VOICE).catch(() => {});
+        }
         if (refs.current.voiceOn) msg.directions.forEach((d) => void player().clip(d.say, AGENT_VOICE).catch(() => {})); // pre-render
         break;
       case "directions.withdrawn":
@@ -189,7 +237,13 @@ export function DeskPage() {
         break;
       case "action.rejected":
         setM((x) => ({ ...x, rejected: x.rejected + 1 }));
-        flash(`Tap rejected: ${msg.reason}`);
+        if (msg.reason === "no call") {
+          stopMics();
+          clearCallControls();
+          flash("The previous call disconnected. Start a new call.");
+        } else {
+          flash(`Tap rejected: ${msg.reason}`);
+        }
         break;
       case "call.review":
         setReview(msg.review);
@@ -201,11 +255,10 @@ export function DeskPage() {
         setPlaybook(msg);
         break;
       case "call.ended":
-        player().stop();
-        setDirs([]); setWithdrawn([]);
+        clearCallControls();
+        setWithdrawn([]);
         micStop.current?.(); // the ended call's mic; a mic opened for a restart waits in micNext
         micStop.current = null;
-        setInterim(""); setSpeaking(null); setAutoAt(null);
         flash(msg.reason);
         break;
       case "error":
@@ -215,26 +268,36 @@ export function DeskPage() {
   }
 
   async function speakAgent(turnId: string, text: string) {
+    const id = callId.current;
+    if (id === null) return;
+    agentTurn.current = turnId;
     setSpeaking(turnId);
-    const rev = refs.current.revision;
+    const isCurrent = () => callId.current === id && agentTurn.current === turnId;
     let result: "ended" | "stopped" = "ended";
     if (refs.current.voiceOn) {
       try {
-        const buf = await player().clip(text, AGENT_VOICE);
-        if (refs.current.floor !== "agent" && rev !== refs.current.revision) return; // taken back while rendering
-        if (refs.current.tapAt) setM((x) => ({ ...x, tapToAudio: Math.round(performance.now() - refs.current.tapAt) }));
-        send({ type: "desk.agentPlaying", turnId });
-        result = await player().play(buf);
+        // Streams: sound starts ~0.8 s after the line is picked instead of after the whole clip renders.
+        result = await player().speak(text, AGENT_VOICE, () => {
+          if (!isCurrent()) return;
+          if (refs.current.tapAt) setM((x) => ({ ...x, tapToAudio: Math.round(performance.now() - refs.current.tapAt) }));
+          send({ type: "desk.agentPlaying", turnId });
+        });
+        if (!isCurrent()) return;
       } catch {
         await new Promise((r) => setTimeout(r, Math.min(4000, text.length * 55)));
       }
     } else {
       await new Promise((r) => setTimeout(r, Math.min(4000, text.length * 55)));
     }
-    setSpeaking((s) => (s === turnId ? null : s));
-    if (result === "stopped") return;
+    if (!isCurrent()) return;
+    agentTurn.current = null;
+    setSpeaking(null);
     send({ type: "desk.agentDone", turnId });
-    if (refs.current.auto && refs.current.nextLine < refs.current.total) setTimeout(() => send({ type: "desk.next" }), 900);
+    if (result === "ended" && refs.current.auto && refs.current.nextLine < refs.current.total) {
+      setTimeout(() => {
+        if (callId.current === id && refs.current.floor === "agent") send({ type: "desk.next" });
+      }, 900);
+    }
   }
 
   useEffect(() => () => stopMics(), []); // stop the mic when leaving the page
@@ -273,14 +336,14 @@ export function DeskPage() {
   };
   const takeBack = () => {
     const wasPlaying = voice.current?.playing ?? false;
-    const ms = voice.current?.stop() ?? 0;
+    const cutTurnId = agentTurn.current ?? undefined;
+    const ms = stopAgent();
     if (wasPlaying) setM((x) => ({ ...x, cuts: x.cuts + 1 }));
     setM((x) => ({ ...x, takeback: ms }));
-    send({ type: "control.takeback", actionId: uid(), revision, localSilenceMs: ms, cutTurnId: speaking ?? undefined });
-    setSpeaking(null);
+    send({ type: "control.takeback", actionId: uid(), revision, localSilenceMs: ms, cutTurnId });
   };
   const end = () => {
-    voice.current?.stop();
+    stopAgent();
     send({ type: "call.end", actionId: uid(), revision });
   };
   const sayTyped = (speaker: "caller" | "alex") => {
@@ -309,7 +372,8 @@ export function DeskPage() {
   const secondsLeft = autoAt ? Math.max(0, Math.ceil((autoAt - now) / 1000)) : 0;
   const AUTO_MS = 4000;
   const fs =
-    !live ? [scenario ? "Call ended" : "No call yet", scenario ? "Read the report below, or start another call." : "Pick a caller and start the call."]
+    ws !== "open" ? ["Disconnected", "Reconnecting to the server…"]
+    : !live ? [scenario ? "Call ended" : "No call yet", scenario ? "Read the report below, or start another call." : "Pick a caller and start the call."]
     : floor === "agent" ? [speaking ? "Your assistant is speaking" : autoAt ? `Your assistant speaks in ${secondsLeft}s` : "Your assistant has the call", autoAt && !speaking ? "Tap a suggestion to choose its next line yourself" : "Press Esc or Take back to stop it at once"]
     : ["You have the call", "Your assistant is listening, scoring the risk and suggesting what to ask"];
   // Score → position on the Low / Medium / High track (High starts at 8; clamp at 14 so the marker stays on the bar).
