@@ -14,12 +14,12 @@ function Home() {
   return (
     <div className="wrap">
       <div className="card join">
-        <h1>Uno ReVoice</h1>
+        <h1 className="word" aria-label="Uno ReVoice"><span className="uno">Uno </span>Re<span className="voice">Voice</span></h1>
         <p className="hint">Open one role per laptop, both on headphones.</p>
         <div className="row">
           <a className="btn primary" href={`/alex${q}`}>I'm Alex (recipient)</a>
           <a className="btn soft" href={`/caller${q}`}>I'm the caller</a>
-          <a className="btn soft" href="/desk">Brain test desk (scripted calls)</a>
+          <a className="btn soft" href="/desk">Brain test desk (live or scripted calls)</a>
         </div>
       </div>
     </div>
@@ -30,8 +30,8 @@ function App() {
   return (
     <>
       <header>
-        <div className="logo">≋</div>
-        <b>Uno ReVoice</b>
+        <img className="logo" src="/brand-icon.svg" alt="" />
+        <b className="word" aria-label="Uno ReVoice"><span className="uno">Uno </span>Re<span className="voice">Voice</span></b>
         <span className="badge">Captions consented · nothing stored</span>
       </header>
       {path === "/desk" ? <DeskPage /> : path === "/alex" ? <AlexPage callId={callId} /> : path === "/caller" ? <CallerPage callId={callId} /> : <Home />}

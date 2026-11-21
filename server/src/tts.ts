@@ -1,7 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 
 const MODEL = process.env.TTS_MODEL || "gemini-3.8-flash-tts";
-const VOICE = process.env.TTS_VOICE || "Kore";
+const VOICE = process.env.TTS_VOICE || "Sulafat"; // see scripts/check-tone.ts
 const SAMPLE_RATE = 24000; // default rate when the model returns raw 16-bit PCM
 
 const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
