@@ -73,6 +73,8 @@ const server = createServer(async (req, res) => {
         return cxml(res, tel.rejectResponse());
       }
       const owner = ownerPhone() || w.forwardedFrom;
+      // Caller-ID fields as SignalWire sent them (helps tell a direct call from a forwarded one).
+      console.log(`[voice] fields: ${['From', 'To', 'ForwardedFrom', 'Diversion', 'CallerName', 'Direction'].map((k) => `${k}=${p.get(k) ?? '-'}`).join(' ')}`);
       console.log(`[voice] call ${w.callSid} from ${w.from || 'unknown'}${w.forwardedFrom ? ` (forwarded from ${w.forwardedFrom})` : ''}`);
       return cxml(res, tel.streamResponse(host(req), { callId: w.callSid, from: w.from, userPhone: owner }));
     }
@@ -119,8 +121,8 @@ const server = createServer(async (req, res) => {
       if (m[2] === 'say') {
         if (!data.text?.trim()) return json(res, 400, { error: 'text required' });
         if (!call.agent || call.joined) return json(res, 409, { error: 'the agent is not on this call' });
-        call.agent.steer(data.text.trim().slice(0, 300));
-        console.log(`[call ${call.callId}] steer: ${data.text}`);
+        call.agent.steer(data.text.trim().slice(0, 300), data.exact === true);
+        console.log(`[call ${call.callId}] ${data.exact ? 'reply' : 'steer'}: ${data.text}`);
         return json(res, 200, { ok: true });
       }
 

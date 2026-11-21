@@ -1,7 +1,8 @@
 import { callStore, updateCall } from '@/lib/call';
+import type { Direction } from '@/lib/protocol';
 import { endDemoCall } from '@/lib/demo';
 import { blockNumber, endCall, joinCall, steerCall } from '@/lib/server';
-import { isSimCall, simEnd, simTakeBack } from '@/lib/simulation';
+import { isSimCall, simEnd, simPick, simTakeBack } from '@/lib/simulation';
 import { addBlocked, markHistoryBlocked, settingsStore } from '@/lib/store';
 
 /** Join: the server has Twilio ring the user's real phone and bridges them to the caller. */
@@ -75,4 +76,17 @@ export async function steer(text: string) {
   const call = callStore.get();
   if (!call || !canSteer(call)) return;
   await steerCall(call.callId, text);
+}
+
+/** Suggested reply: the agent says these exact words next. */
+export async function pickDirection(direction: Direction) {
+  const call = callStore.get();
+  if (!call || call.ended || call.joined || call.demo) return;
+  if (isSimCall(call.callId)) {
+    simPick(call.callId, direction.id);
+  } else {
+    await steerCall(call.callId, direction.say, true);
+  }
+  // Hide the cards until the next suggestions arrive, so the same line isn't sent twice.
+  updateCall({ directions: [] });
 }

@@ -22,6 +22,8 @@ export type SimMsg =
   | { type: 'agent.cut'; turnId: string }
   | { type: 'risk.signal'; sign: SimSign }
   | { type: 'risk.level'; risk: { level: Level; locked: boolean } }
+  | { type: 'directions'; directions: { id: string; label: string; say: string }[] }
+  | { type: 'directions.withdrawn'; directionId: string }
   | { type: 'call.ended'; reason: string }
   | { type: 'call.review'; review: { verdict: 'scam' | 'legit' | 'unclear'; summary: string } }
   | { type: 'action.accepted'; revision: number }
@@ -53,6 +55,8 @@ export function createCallMapper(callId: string, emit: (e: ServerEvent) => void,
   let done = false;
   let endTimer: ReturnType<typeof setTimeout> | null = null;
   const signs = new Map<string, SimSign>();
+  let directions: { id: string; label: string; say: string }[] = [];
+  const sendDirections = () => emit({ type: 'directions', callId, directions: directions.slice(0, 3) });
 
   const finish = () => {
     if (done) return;
@@ -93,6 +97,14 @@ export function createCallMapper(callId: string, emit: (e: ServerEvent) => void,
         emit({ type: 'verdict', callId, verdict, reasons });
         return;
       }
+      case 'directions':
+        directions = m.directions.map(({ id, label, say }) => ({ id, label, say }));
+        sendDirections();
+        return;
+      case 'directions.withdrawn':
+        directions = directions.filter((d) => d.id !== m.directionId);
+        sendDirections();
+        return;
       case 'call.ended':
         // Wait for the review so the final verdict lands before the call closes.
         endTimer = setTimeout(finish, REVIEW_WAIT_MS);
@@ -136,6 +148,13 @@ function control(callId: string, type: 'control.takeback' | 'call.end') {
   const msg: Record<string, unknown> = { type, actionId: `app-${Date.now()}`, revision: c.mapper.revision() };
   if (type === 'control.takeback') msg.localSilenceMs = 0;
   c.send(msg);
+}
+
+/** Suggested reply: the agent says this direction next. */
+export function simPick(callId: string, directionId: string) {
+  const c = controllers.get(callId);
+  if (!c || c.mapper.done()) throw new Error('Not connected to this call any more.');
+  c.send({ type: 'direction.pick', actionId: `app-${Date.now()}`, revision: c.mapper.revision(), directionId });
 }
 
 /** Join: take the call back from the agent. */

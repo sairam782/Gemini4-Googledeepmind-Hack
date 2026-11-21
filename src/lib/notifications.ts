@@ -74,6 +74,19 @@ export async function notifyScreeningStarted(callId: string, demo: boolean) {
   }
 }
 
+/** Scam verdict: tells the user even if the app is in the background. */
+export async function notifyScam(callId: string, reason?: string) {
+  try {
+    if (!(await ensurePermission())) return;
+    await Notifications.scheduleNotificationAsync({
+      content: { title: 'This call is a scam', body: reason ?? 'Open Uno ReVoice to hang up or block it.', data: { callId, screen: 'live' } },
+      trigger: Platform.OS === 'android' ? { channelId: CHANNEL_ID } : null,
+    });
+  } catch (e) {
+    console.warn('Could not show notification', e);
+  }
+}
+
 /** Tapping a "screening" notification opens the Live call screen. */
 export function useOpenLiveOnNotificationTap() {
   const response = Notifications.useLastNotificationResponse();

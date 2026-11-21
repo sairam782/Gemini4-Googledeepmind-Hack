@@ -12,6 +12,9 @@ export type TranscriptEvent = { type: 'transcript'; callId: string; turn: number
 export type SignalEvent = { type: 'signal'; callId: string; label: string; turn: number };
 export type VerdictEvent = { type: 'verdict'; callId: string; verdict: Verdict; reasons: string[] };
 export type CallEndedEvent = { type: 'call.ended'; callId: string };
+/** Up to 3 suggested next lines for the agent; tapping one makes the agent say it. */
+export type Direction = { id: string; label: string; say: string };
+export type DirectionsEvent = { type: 'directions'; callId: string; directions: Direction[] };
 /** A warning sign the agent took back (web simulation only). */
 export type SignalRemovedEvent = { type: 'signal.removed'; callId: string; label: string };
 
@@ -20,6 +23,7 @@ export type ServerEvent =
   | TranscriptEvent
   | SignalEvent
   | SignalRemovedEvent
+  | DirectionsEvent
   | VerdictEvent
   | CallEndedEvent;
 
@@ -59,6 +63,14 @@ export function parseServerEvent(raw: string): ServerEvent | null {
           ? [e.reasons]
           : [];
       return { type: e.type, callId: e.callId, verdict: e.verdict as Verdict, reasons };
+    }
+    case 'directions': {
+      const list = Array.isArray(e.directions) ? e.directions : [];
+      const directions = list
+        .filter((d): d is Direction => !!d && typeof d.id === 'string' && typeof d.label === 'string' && typeof d.say === 'string')
+        .slice(0, 3)
+        .map(({ id, label, say }) => ({ id, label, say }));
+      return { type: e.type, callId: e.callId, directions };
     }
     case 'call.ended':
       return { type: e.type, callId: e.callId };

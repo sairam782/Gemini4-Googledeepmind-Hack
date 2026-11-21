@@ -53,6 +53,9 @@ async function json(model, prompt) {
   return JSON.parse(r.text || '{}');
 }
 
+/** Guard on suggested lines: no codes or long numbers, no promises to pay, no "scam" talk. */
+const safeLine = (s) => !/\d{4,}|\b(i'll|we'll|will) (pay|send|transfer)|\bscam\b/i.test(s);
+
 const transcriptText = (turns) => turns.map((t) => `${t.speaker === 'caller' ? 'Caller' : 'Assistant'}: ${t.text}`).join('\n');
 
 /**
@@ -92,9 +95,19 @@ ${ids}
 Call so far:
 ${transcriptText(turns)}
 
-Return JSON: {"signs": ["<id>", ...]} with ids from the list only. Empty list if none.`,
+Also suggest 3 different next lines the ASSISTANT could say now. Each one: one short sentence, polite, spoken English.
+The assistant never shares personal details, never agrees to pay or confirm anything, never asks for codes,
+and never says "scam". Good moves: ask who they are, ask for details, offer a callback on the usual number, slow things down.
+
+Return JSON: {"signs": ["<id>", ...], "replies": [{"label": "<2-4 words>", "say": "<exact words>"}, ...]}
+Sign ids from the list only; empty list if none.`,
       );
       for (const id of Array.isArray(r.signs) ? r.signs : []) flag(id, last?.turn ?? 0);
+      const replies = (Array.isArray(r.replies) ? r.replies : [])
+        .filter((x) => x && typeof x.label === 'string' && typeof x.say === 'string' && safeLine(x.say))
+        .slice(0, 3)
+        .map((x, i) => ({ id: `r${last?.turn ?? 0}-${i}`, label: x.label.slice(0, 40), say: x.say.slice(0, 200) }));
+      if (replies.length) emit({ type: 'directions', directions: replies });
     } catch (e) {
       log.warn(`[brain] fast lane failed: ${e.message}`);
     } finally {

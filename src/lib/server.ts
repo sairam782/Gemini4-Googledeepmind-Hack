@@ -64,8 +64,8 @@ export function endCall(callId: string) {
 }
 
 /** Steering: a private instruction for the agent's next line. */
-export function steerCall(callId: string, text: string) {
-  return post(`/api/calls/${encodeURIComponent(callId)}/say`, { text });
+export function steerCall(callId: string, text: string, exact = false) {
+  return post(`/api/calls/${encodeURIComponent(callId)}/say`, { text, exact });
 }
 
 /** Adds the number to the server's block list. */

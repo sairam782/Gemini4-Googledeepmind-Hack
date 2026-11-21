@@ -5,6 +5,7 @@ import { GoogleGenAI, Modality } from '@google/genai';
 
 const MODEL = () => process.env.GEMINI_LIVE_MODEL || 'gemini-3.8-live';
 const OWNER = () => process.env.OWNER_NAME || 'Alex';
+const LANG = () => process.env.LANGUAGE || 'en-US';
 
 let ai = null;
 const client = () => (ai ??= new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }));
@@ -21,6 +22,7 @@ Rules you never break:
 - If they want ${owner}, money, or a decision, offer: "She'll call you back on her usual number."
 - If they pressure you or say it's urgent, stay calm and repeat that ${owner} will call back on her usual number.
 - Keep each reply to one or two short sentences, like a real phone call. Don't say "scam" to the caller.
+- Always speak English, even if the caller's audio sounds like another language.
 Sometimes you get a private note from ${owner} in brackets. Follow it in your next line, and never say you got a note.`;
 }
 
@@ -83,6 +85,9 @@ export function startAgent(cb) {
       config: {
         responseModalities: [Modality.AUDIO],
         systemInstruction: prompt(),
+        // Phone audio is low quality and Live may guess the wrong language: pin it (LANGUAGE, default en-US).
+        // (Transcription language can't be pinned with an API key; the prompt keeps the agent in English.)
+        speechConfig: { languageCode: LANG() },
         inputAudioTranscription: {},
         outputAudioTranscription: {},
       },
@@ -118,13 +123,13 @@ export function startAgent(cb) {
       }
       session.sendRealtimeInput({ audio: { data: b64, mimeType: 'audio/pcm;rate=16000' } });
     },
-    /** Steering from the app: a private instruction for the next line. */
-    steer(text) {
+    /** Steering from the app: a private instruction, or (exact) the exact words to say next. */
+    steer(text, exact = false) {
       if (!session) throw new Error('The agent is not connected yet.');
-      session.sendClientContent({
-        turns: [{ role: 'user', parts: [{ text: `[Private note from ${OWNER()}: ${text}]` }] }],
-        turnComplete: true,
-      });
+      const note = exact
+        ? `[Private note from ${OWNER()}: say exactly this to the caller now, nothing else: "${text}"]`
+        : `[Private note from ${OWNER()}: ${text}]`;
+      session.sendClientContent({ turns: [{ role: 'user', parts: [{ text: note }] }], turnComplete: true });
     },
     close() {
       closed = true;

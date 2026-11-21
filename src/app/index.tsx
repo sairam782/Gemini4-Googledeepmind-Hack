@@ -1,6 +1,6 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View, type ScrollViewInstance } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type ScrollViewInstance } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { BrandHeader } from '@/components/brand';
@@ -9,10 +9,11 @@ import { BigButton, Card, StatusLine, T } from '@/components/ui';
 import { VerdictCard } from '@/components/verdict-card';
 import { BottomTabInset, Brand, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { block, canSteer, end, join, steer } from '@/lib/actions';
+import { block, canSteer, end, join, pickDirection, steer } from '@/lib/actions';
 import { callStore, dismissCall, type LiveCall } from '@/lib/call';
 import { connectionStore, type ConnectionStatus } from '@/lib/connection';
 import { startDemo } from '@/lib/demo';
+import { notifyScam } from '@/lib/notifications';
 import { startPhoneSim, type SimKind } from '@/lib/phone-sim';
 import { isSimCall } from '@/lib/simulation';
 import { formatNumber } from '@/lib/phone';
@@ -115,6 +116,7 @@ function ActiveCall({ call }: { call: LiveCall }) {
     scroll.current?.scrollToEnd({ animated: true });
   }, [call.transcript.length]);
 
+
   const run = async (which: 'join' | 'end' | 'block', fn: () => Promise<void>) => {
     setBusy(which);
     try {
@@ -125,6 +127,21 @@ function ActiveCall({ call }: { call: LiveCall }) {
       setBusy(null);
     }
   };
+
+  // Scam verdict on a real or simulated call: say so clearly, and let the user decide to hang up.
+  const warned = useRef<string | null>(null);
+  useEffect(() => {
+    if (call.demo || call.ended || call.verdict !== 'scam' || warned.current === call.callId) return;
+    warned.current = call.callId;
+    void notifyScam(call.callId, call.reasons[0]);
+    Alert.alert('This call is a scam', call.reasons.slice(0, 2).join('\n') || 'Gemini flagged this caller as a scam.', [
+      { text: 'Keep listening', style: 'cancel' },
+      { text: 'Hang up', onPress: () => void run('end', end) },
+      { text: 'Hang up and block', style: 'destructive', onPress: () => void run('block', block) },
+    ]);
+    // run is recreated each render; the guard above makes this fire once per call.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [call.verdict, call.callId, call.ended, call.demo]);
 
   const confirmBlock = () =>
     Alert.alert('Block this number?', `${formatNumber(call.from)} won’t reach you again.`, [
@@ -171,6 +188,7 @@ function ActiveCall({ call }: { call: LiveCall }) {
       </ScrollView>
 
       <View style={[styles.actions, { paddingBottom: BottomTabInset + Spacing.sm }]}>
+        {!call.ended && !call.joined && call.directions.length > 0 ? <Suggestions call={call} /> : null}
         {canSteer(call) ? <SteerBox /> : null}
         {call.ended ? (
           <View style={styles.actionRow}>
@@ -220,6 +238,50 @@ function ModeBadge({ mode: forCall }: { mode?: AppMode }) {
   );
 }
 
+/** Suggested replies from Gemini: tap one and the agent says it next. */
+function Suggestions({ call }: { call: LiveCall }) {
+  const theme = useTheme();
+  const [sending, setSending] = useState<string | null>(null);
+  const pick = async (id: string) => {
+    const d = call.directions.find((x) => x.id === id);
+    if (!d) return;
+    setSending(id);
+    try {
+      await pickDirection(d);
+    } catch (e) {
+      Alert.alert('Couldn’t send that reply', e instanceof Error ? e.message : String(e));
+    } finally {
+      setSending(null);
+    }
+  };
+  return (
+    <View style={styles.suggest}>
+      <T kind="label">Suggested replies</T>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.suggestRow}>
+        {call.directions.map((d) => (
+          <Pressable
+            key={d.id}
+            accessibilityRole="button"
+            accessibilityHint={`The agent says: ${d.say}`}
+            disabled={sending !== null}
+            onPress={() => void pick(d.id)}
+            style={({ pressed }) => [
+              styles.suggestCard,
+              { borderColor: theme.border, backgroundColor: theme.card, opacity: pressed || sending === d.id ? 0.6 : 1 },
+            ]}>
+            <Text style={[styles.suggestLabel, { color: theme.text }]} numberOfLines={1}>
+              {d.label}
+            </Text>
+            <Text style={[styles.suggestSay, { color: theme.textSecondary }]} numberOfLines={2}>
+              “{d.say}”
+            </Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
 /** Steer: a private instruction for the agent's next line (Live calls). */
 function SteerBox() {
   const theme = useTheme();
@@ -260,6 +322,11 @@ const styles = StyleSheet.create({
   badge: { alignSelf: 'flex-start', borderWidth: 1.5, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   badgeText: { fontSize: 13, fontWeight: '800', letterSpacing: 1 },
   steer: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.sm },
+  suggest: { gap: 4, marginBottom: Spacing.sm },
+  suggestRow: { gap: Spacing.sm, paddingRight: Spacing.md },
+  suggestCard: { width: 230, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 8, gap: 2 },
+  suggestLabel: { fontSize: 15, fontWeight: '800' },
+  suggestSay: { fontSize: 13, lineHeight: 17 },
   steerInput: { flex: 1, minHeight: 48, borderWidth: 1, borderRadius: 14, paddingHorizontal: 14, fontSize: 17 },
   steerButton: { minHeight: 48, minWidth: 80 },
   screen: { flex: 1 },

@@ -1,4 +1,4 @@
-import type { ServerEvent, Speaker, Verdict } from '@/lib/protocol';
+import type { Direction, ServerEvent, Speaker, Verdict } from '@/lib/protocol';
 import { redactSafeWords } from '@/lib/redact';
 import { addHistory, createStore, safeWordsStore } from '@/lib/store';
 
@@ -13,6 +13,8 @@ export type LiveCall = {
   signals: WarningSign[];
   verdict: Verdict | null;
   reasons: string[];
+  /** Suggested next lines for the agent (Simulation and Live). */
+  directions: Direction[];
   ended: boolean;
   endedAt: number | null;
   joining: boolean;
@@ -33,6 +35,7 @@ function newCall(callId: string, from: string, demo: boolean): LiveCall {
     signals: [],
     verdict: null,
     reasons: [],
+    directions: [],
     ended: false,
     endedAt: null,
     joining: false,
@@ -93,6 +96,9 @@ export function applyEvent(e: ServerEvent, demo = false) {
     }
     case 'signal.removed':
       callStore.set({ ...current, signals: current.signals.filter((s) => s.label !== e.label) });
+      return;
+    case 'directions':
+      callStore.set({ ...current, directions: e.directions });
       return;
     case 'verdict':
       callStore.set({ ...current, verdict: e.verdict, reasons: e.reasons });
