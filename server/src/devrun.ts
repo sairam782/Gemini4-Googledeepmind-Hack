@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 /**
  * Dev-only: start one of the server's own test scripts and stream its output to a log file,
  * so a run can be kicked off from the browser (the desk) and read back later.
- * Only localhost may call it, only these scripts, only simple flags. DEV_RUNNER=0 turns it off.
+ * Open to anyone (hackathon mode), but only these scripts and only simple flags. DEV_RUNNER=0 turns it off.
  */
-const SCRIPTS = new Set(["probe-models.ts", "test-learn.ts", "learn.ts", "replay.ts", "learning-db.ts", "find-supabase.ts"]);
+const SCRIPTS = new Set(["probe-models.ts", "test-learn.ts", "learn.ts", "replay.ts", "learning-db.ts", "find-supabase.ts", "eval-suite.ts"]);
 const serverDir = fileURLToPath(new URL("..", import.meta.url));
 const logDir = join(serverDir, "data", "learning", "runs");
 const runs = new Map<string, { script: string; args: string[]; startedAt: string; done: boolean; code: number | null; log: string }>();

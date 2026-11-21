@@ -10,6 +10,7 @@ export interface RecordMeta {
   label: Label;
   labelSource: CallRecord["labelSource"];
   playbookVersion: number;
+  alexLabel?: Label;
   scenarioId?: string;
   personaId?: string;
   guardBlocks: number;

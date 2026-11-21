@@ -11,9 +11,10 @@ import { streamSig, verifyTwilioRequest } from "./twilioAuth.ts";
 import { listCalls, loadCall } from "./store.ts";
 import { isBlocked } from "./blocklist.ts";
 import type { DeskClientMsg } from "../../shared/brain.ts";
-import { devRunnerOn, isLocal, listRuns, runStatus, startRun } from "./devrun.ts";
+import { devRunnerOn, listRuns, runStatus, startRun } from "./devrun.ts";
+import { serveWeb } from "./web.ts";
 
-const PORT = Number(process.env.API_PORT || 8787);
+const PORT = Number(process.env.PORT || process.env.API_PORT || 8787); // PORT: set by hosting platforms
 const rooms = new Map<string, CallRoom>();
 
 const http = createServer(async (req, res) => {
@@ -53,9 +54,29 @@ const http = createServer(async (req, res) => {
       if (saved) return json(res, 200, saved.review);
       return json(res, 404, { error: "no such call" });
     }
-    // Dev runner (localhost only): start a test script, read its log. See devrun.ts.
+    // ---- review phase, for the dashboard (/evals) and the reviews page (/reviews)
+    if (req.method === "GET" && (req.url === "/api/evals" || req.url?.startsWith("/api/reviews") || req.url === "/api/playbook")) {
+      const { learningStore } = await import("./learn/store.ts");
+      const store = learningStore();
+      if (req.url === "/api/evals") return json(res, 200, (await store.runs("suite-")).slice(0, 20));
+      if (req.url === "/api/playbook") return json(res, 200, await store.currentPlaybook());
+      const limit = Math.min(100, Number(new URL(req.url!, "http://x").searchParams.get("limit")) || 40);
+      const all = await store.calls();
+      all.sort((a, b) => (b.record.endedAt ?? "").localeCompare(a.record.endedAt ?? ""));
+      return json(res, 200, all.slice(0, limit));
+    }
+    if (req.method === "POST" && req.url === "/api/evals/run") {
+      const { calls: n, persona, current } = JSON.parse((await body(req)) || "{}") as { calls?: number; persona?: string; current?: boolean };
+      const args = ["--calls", String(Math.max(2, Math.min(10, Number(n) || 5))), "--persona", String(persona || "sister-tow"), ...(current ? ["--current"] : [])];
+      const r = startRun("eval-suite.ts", args);
+      return json(res, r.error ? 400 : 202, r);
+    }
+    if (req.method === "GET" && req.url === "/api/personas") {
+      const { PERSONAS } = await import("./learn/personas.ts");
+      return json(res, 200, PERSONAS.map(({ id, title, kind }) => ({ id, title, kind })));
+    }
+    // Dev runner (open in hackathon mode): start a test script, read its log. See devrun.ts.
     if (req.url?.startsWith("/api/dev/") && devRunnerOn()) {
-      if (!isLocal(req.socket.remoteAddress)) return json(res, 403, { error: "localhost only" });
       if (req.method === "POST" && req.url === "/api/dev/run") {
         const { script, args } = JSON.parse(await body(req)) as { script?: string; args?: unknown };
         const r = startRun(String(script ?? ""), args);
@@ -88,6 +109,7 @@ const http = createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "audio/wav", "x-render-ms": String(Date.now() - t0) });
       return res.end(wav);
     }
+    if (serveWeb(req, res)) return;
     json(res, 404, { error: "not found" });
   } catch (err) {
     console.error(err);
@@ -166,7 +188,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   });
 });
 
-if (!appTokenSet()) console.warn("APP_TOKEN not set: only this machine can join live calls. Set it before exposing the server.");
+if (!appTokenSet()) console.log("APP_TOKEN not set: anyone can join live calls (open hackathon mode).");
 http.listen(PORT, () => {
   console.log(`ReVoice server on http://localhost:${PORT}  (tts: ${ttsEnabled() ? "on" : "off, no GEMINI_API_KEY"})`);
   if (!process.env.TWILIO_AUTH_TOKEN) console.warn("Twilio signature check OFF");

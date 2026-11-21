@@ -4,7 +4,7 @@ import type { IncomingMessage } from "node:http";
 /**
  * Who may watch or steer a live phone call. Alex's app holds APP_TOKEN and sends it when joining
  * (WebSocket `join` with role "app") and as `Authorization: Bearer` on /api/calls.
- * Without APP_TOKEN only this machine may join, which is enough for local demos but not for a public URL.
+ * Without APP_TOKEN anyone may join (hackathon default: wide open). Set APP_TOKEN to lock it down.
  */
 const TOKEN = process.env.APP_TOKEN || "";
 
@@ -22,7 +22,8 @@ function same(given: string, expected: string) {
 }
 
 export function appAllowed(req: IncomingMessage, token: string | null | undefined) {
-  return TOKEN ? typeof token === "string" && same(token, TOKEN) : isLoopback(req);
+  if (!TOKEN) return true; // open by default
+  return (typeof token === "string" && same(token, TOKEN)) || isLoopback(req);
 }
 
 export function bearer(req: IncomingMessage) {

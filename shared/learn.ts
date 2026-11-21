@@ -18,6 +18,8 @@ export interface CallRecord {
   inContacts: boolean;
   label: Label;
   labelSource: "scenario" | "persona" | "alex" | "none";
+  /** Alex's answer to "Was this a scam?" when the call also has a known answer (test calls). The critic sees it as a hint only. */
+  alexLabel?: Label;
   playbookVersion: number;
   turns: Turn[];
   /** Risk as Alex saw it when each caller line was the newest one (last update before the next caller line). */
@@ -112,6 +114,15 @@ export interface CriticReport {
   ms: number;
   ok: boolean;
   error?: string;
+  /** The critic's OWN call, made from the transcript before it sees anyone's label. */
+  ownVerdict?: { call: "scam" | "legit" | "unclear"; confidence: number; reasons: string; evidence: string[] };
+  /** Alex's answer to "Was this a scam?", if any, and what the critic made of it. Advisory only. */
+  alexOpinion?: { label: Label; agrees: boolean; note: string };
+  /** Grades as the model gave them, before code caps. */
+  rawGrades?: { classification: number; questioning: number; timing: number; safety: number };
+  /** Hard facts that capped a grade ("timing ≤ 2: money was asked before any identity check"). */
+  caps?: string[];
+  /** Final grades, 1-5: the model's, capped by hard facts. */
   grades: { classification: number; questioning: number; timing: number; safety: number };
   summary: string;
   findings: Finding[];
@@ -129,3 +140,49 @@ export interface PlaybookUpdate {
   /** Same-meaning lessons folded together ("L-005→L-003"). */
   merged?: string[];
 }
+
+// ---------------------------------------------------------------- eval suite (server/src/learn/evals.ts)
+
+export interface ScoreBreakdown {
+  verdict: number; // 30: the meter ended where it should (scam → High, legit → not High)
+  detection: number; // 20: scams: how early it reached High; legit: never reached High
+  checkTiming: number; // 15: scams: identity check or callback before money; legit: no repeated questions
+  critic: number; // 25: the strict critic's questioning + timing grades
+  safety: number; // 10: nothing leaked, nothing blocked
+}
+
+export interface SuiteCall {
+  n: number;
+  callId: string;
+  persona: string;
+  kind: "scam" | "legit";
+  playbookLessons: number; // active lessons this call started with
+  score: number;
+  parts: ScoreBreakdown;
+  delta: number | null; // vs the previous call
+  trend: "first" | "better" | "same" | "worse";
+  metrics: Pick<JudgeMetrics, "finalLevel" | "locked" | "verdictCorrect" | "reachedHighAt" | "firstMoneyAt" | "firstCheckAskedAt" | "checkBeforeMoney" | "agentQuestions" | "callerTurns">;
+  grades: CriticReport["grades"];
+  ownVerdict: CriticReport["ownVerdict"] | null;
+  criticAgreesWithTruth: boolean | null;
+  summary: string;
+  caps: string[];
+  lessonsAdded: { id: string; when: string; do: string }[];
+  ms: number;
+}
+
+export interface SuiteRun {
+  kind: "suite";
+  name: string;
+  startedAt: string;
+  finishedAt: string | null;
+  status: "running" | "done" | "failed";
+  error?: string;
+  persona: string[];
+  criticModel: string;
+  callerModel: string;
+  startPlaybook: "empty" | "current";
+  calls: SuiteCall[];
+  result: null | { first: number; last: number; best: number; improvedSteps: number; steps: number; monotonic: boolean; passed: boolean };
+}
+

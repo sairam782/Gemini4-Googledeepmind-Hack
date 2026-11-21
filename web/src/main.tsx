@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { AlexPage } from "./pages/AlexPage.tsx";
 import { CallerPage } from "./pages/CallerPage.tsx";
 import { DeskPage } from "./pages/DeskPage.tsx";
+import { EvalsPage } from "./pages/EvalsPage.tsx";
+import { ReviewsPage } from "./pages/ReviewsPage.tsx";
 import "./styles.css";
 
 const params = new URLSearchParams(location.search);
@@ -72,7 +74,7 @@ function Home() {
 }
 
 function App() {
-  const here = path === "/desk" ? "desk" : path === "/alex" || path === "/caller" ? "live" : "home";
+  const here = path === "/desk" ? "desk" : path === "/alex" || path === "/caller" ? "live" : path === "/evals" ? "evals" : path === "/reviews" ? "reviews" : "home";
   return (
     <>
       <header className="appbar">
@@ -80,12 +82,14 @@ function App() {
           <a className="brand" href="/"><Mark /> <Word /></a>
           <nav className="nav">
             <a href="/desk" aria-current={here === "desk" ? "page" : undefined}>Call desk</a>
+            <a href="/reviews" aria-current={here === "reviews" ? "page" : undefined}>Reviews</a>
+            <a href="/evals" aria-current={here === "evals" ? "page" : undefined}>Evals</a>
             <a href={`/alex?call=${encodeURIComponent(callId)}`} aria-current={here === "live" ? "page" : undefined}>Live call</a>
           </nav>
           <span className="promise">The assistant always says it's an AI</span>
         </div>
       </header>
-      {path === "/desk" ? <DeskPage /> : path === "/alex" ? <AlexPage callId={callId} /> : path === "/caller" ? <CallerPage callId={callId} /> : <Home />}
+      {path === "/desk" ? <DeskPage /> : path === "/evals" ? <EvalsPage /> : path === "/reviews" ? <ReviewsPage /> : path === "/alex" ? <AlexPage callId={callId} /> : path === "/caller" ? <CallerPage callId={callId} /> : <Home />}
     </>
   );
 }

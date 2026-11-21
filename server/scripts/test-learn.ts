@@ -141,5 +141,34 @@ ok("file store: versions saved, gated weight lessons stripped, rollback works");
   delete (globalThis as { __revoiceLlmMock?: unknown }).__revoiceLlmMock;
 }
 
+// --- strict critic: grade caps on hard facts, and a blind verdict
+{
+  const { capGrades, critique } = await import("../src/learn/critic.ts");
+  const five = { classification: 5, questioning: 5, timing: 5, safety: 5 };
+  const base = judge(rec);
+  const bad = { ...base, finalLevel: "Low" as const, checkBeforeMoney: false, firstMoneyAt: 1, firstCheckAskedAt: 3, leaks: ["t9"], repeatedCategories: ["verify_identity" as const] };
+  const { grades, caps } = capGrades(five, bad, "scam");
+  assert.deepEqual(grades, { classification: 2, questioning: 3, timing: 2, safety: 1 }, JSON.stringify({ grades, caps }));
+  const legitHigh = capGrades(five, { ...base, finalLevel: "High" }, "legit");
+  assert.equal(legitHigh.grades.classification, 1);
+  ok(`grade caps: ${caps.length} caps on a bad scam call (${grades.classification}/${grades.questioning}/${grades.timing}/${grades.safety}); false alarm → classification 1`);
+
+  let seen = "";
+  (globalThis as { __revoiceLlmMock?: (m: string, p: string) => unknown }).__revoiceLlmMock = (_m, prompt) => {
+    seen = prompt;
+    return { verdict: { call: "scam", confidence: 0.95, reasons: "Money and a dodged check.", evidence: ["t2"] }, alexOpinion: { agrees: false, note: "The caller dodged the check." }, grades: five, summary: "x", findings: [], lessons: [] };
+  };
+  const blind = { ...rec, label: "scam" as const, labelSource: "persona" as const };
+  const r1 = await critique(blind, judge(blind), EMPTY_PLAYBOOK);
+  assert.ok(!/Ground truth|this call was a SCAM|Alex's answer/i.test(seen), "the persona's known answer leaked into the critic prompt");
+  assert.equal(r1.ownVerdict?.call, "scam");
+  const r2 = await critique({ ...blind, alexLabel: "legit" }, judge(blind), EMPTY_PLAYBOOK);
+  assert.match(seen, /Alex's answer to "Was this a scam\?": NO/);
+  assert.equal(r2.alexOpinion?.agrees, false);
+  assert.deepEqual(r2.grades, r1.grades, "Alex's answer must not move the grades by itself");
+  ok(`blind critic: known answer hidden; Alex's "No" shown as a hint, critic keeps "${r2.ownVerdict?.call}" and the same grades`);
+  delete (globalThis as { __revoiceLlmMock?: unknown }).__revoiceLlmMock;
+}
+
 console.log(`\nALL ${n} CHECKS PASS`);
 process.exit(0);

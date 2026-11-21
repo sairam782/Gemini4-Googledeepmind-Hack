@@ -19,6 +19,8 @@ export interface CallMeta {
   personaId?: string;
   label?: Label;
   labelSource?: CallRecord["labelSource"];
+  /** Alex's own answer, kept apart from a test call's known answer. */
+  alexLabel?: Label;
   /** false: don't run the critic automatically after the review (eval rounds call it themselves). */
   autoLearn?: boolean;
 }
@@ -421,10 +423,10 @@ export class LiveCall {
   }
 
   /** Review phase: judge + critic + playbook update. Resolves when done (eval scripts await it). */
-  learn(): Promise<void> {
+  learn(opts: { updatePlaybook?: boolean } = {}): Promise<void> {
     const job = async () => {
       const record = this.record();
-      const out = await reviewAndLearn(record);
+      const out = await reviewAndLearn(record, { learn: opts.updatePlaybook !== false });
       this.emit({ type: "critic.report", report: out.critic, metrics: out.metrics, label: record.label });
       if (out.update) {
         this.emit({
@@ -455,14 +457,20 @@ export class LiveCall {
       label: this.meta.label ?? "unknown",
       labelSource: this.meta.labelSource ?? "none",
       playbookVersion: this.ctx.playbook?.version ?? 0,
+      ...(this.meta.alexLabel ? { alexLabel: this.meta.alexLabel } : {}),
       guardBlocks: this.guardBlocks,
     });
   }
 
-  /** Alex answered "Was this a scam?" after hang-up. The critic re-runs with the real label. */
+  /**
+   * Alex answered "Was this a scam?" after hang-up. The critic re-reviews with Alex's answer as a hint
+   * (it keeps its own verdict if it disagrees). A test call keeps its known answer for the code judge.
+   * The re-review doesn't touch the playbook: the first review already taught what this call had to teach.
+   */
   setLabel(label: Label) {
     if (!this.ended) return this.emit({ type: "error", message: "label the call after it ends" });
-    this.meta = { ...this.meta, label, labelSource: "alex" };
-    if (learningOn() && this.review) void this.learn();
+    const known = this.meta.labelSource === "scenario" || this.meta.labelSource === "persona";
+    this.meta = known ? { ...this.meta, alexLabel: label } : { ...this.meta, label, labelSource: label === "unknown" ? "none" : "alex", alexLabel: label };
+    if (learningOn() && this.review) void this.learn({ updatePlaybook: false });
   }
 }

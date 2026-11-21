@@ -28,6 +28,8 @@ export interface LearningStore {
   saveCall(c: StoredCall): StoreResult<void>;
   calls(): StoreResult<StoredCall[]>;
   saveRun(name: string, data: unknown): StoreResult<void>;
+  /** Saved runs whose name starts with `prefix` (e.g. "suite-"), newest first. */
+  runs(prefix?: string): StoreResult<{ name: string; data: unknown }[]>;
 }
 
 export class FileStore implements LearningStore {
@@ -104,6 +106,15 @@ export class FileStore implements LearningStore {
 
   saveRun(name: string, data: unknown) {
     this.write(join(this.dir, "runs", `${name.replace(/[^\w.-]/g, "_")}.json`), data);
+  }
+
+  runs(prefix = "") {
+    const dir = join(this.dir, "runs");
+    return readdirSync(dir)
+      .filter((f) => f.endsWith(".json") && f.startsWith(prefix))
+      .sort()
+      .reverse()
+      .map((f) => ({ name: f.slice(0, -5), data: this.read<unknown>(join(dir, f)) }));
   }
 
   history() {

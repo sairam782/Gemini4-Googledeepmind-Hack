@@ -6,7 +6,8 @@ import postgres from "postgres";
  * Supabase signs its Postgres certificates with its own root CA, which Node doesn't trust out of the box.
  * Full verification needs that CA: Project Settings → Database → SSL configuration → Download certificate.
  * SUPABASE_CA_CERT may be a file path or the PEM itself (handy on hosting platforms); otherwise the
- * certificate committed at supabase/prod-ca-2021.crt is used. Verification is never switched off.
+ * certificate committed at supabase/prod-ca-2021.crt is used. Without either, it still connects over TLS
+ * but skips the certificate check (hackathon mode: never fail to connect).
  */
 function supabaseCa(): string | undefined {
   const v = process.env.SUPABASE_CA_CERT?.trim();
@@ -31,7 +32,7 @@ export class SupabaseStore implements LearningStore {
     }
     const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
     this.sql = postgres(connectionString, {
-      ssl: local && url.searchParams.get("sslmode") === "disable" ? false : ((ca) => (ca ? { ca, rejectUnauthorized: true } : "verify-full"))(supabaseCa()),
+      ssl: local && url.searchParams.get("sslmode") === "disable" ? false : ((ca) => (ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: false }))(supabaseCa()),
       prepare: false,
       max: 5,
       connect_timeout: 15, // a cold pooler + TLS handshake can take a few seconds
@@ -124,6 +125,13 @@ export class SupabaseStore implements LearningStore {
 
   async calls(): Promise<StoredCall[]> {
     return this.sql<StoredCall[]>`select record, metrics, critic from revoice.calls order by call_id`;
+  }
+
+  async runs(prefix = ""): Promise<{ name: string; data: unknown }[]> {
+    const rows = await this.sql<{ name: string; result: unknown }[]>`
+      select name, result from revoice.eval_runs where name like ${prefix.replace(/[%_]/g, "\\$&") + "%"} order by name desc limit 50
+    `;
+    return rows.map((r) => ({ name: r.name, data: r.result }));
   }
 
   async saveRun(name: string, data: unknown): Promise<void> {

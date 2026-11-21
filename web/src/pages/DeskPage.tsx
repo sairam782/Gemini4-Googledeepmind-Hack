@@ -57,6 +57,7 @@ export function DeskPage() {
   const [now, setNow] = useState(Date.now());
   const [typed, setTyped] = useState("");
   const [review, setReview] = useState<CallReview | null>(null);
+  const [myLabel, setMyLabel] = useState<Label | null>(null); // your answer to "Was this a scam?"
   const [critic, setCritic] = useState<{ report: CriticReport; metrics: JudgeMetrics; label: Label } | null>(null);
   const [playbook, setPlaybook] = useState<Extract<DeskServerMsg, { type: "playbook.updated" }> | null>(null);
   // Risk as it stood after each caller line, for the ticks on the conversation line.
@@ -117,7 +118,7 @@ export function DeskPage() {
       case "call.started":
         setScenario(msg.scenario);
         setScript(msg.script);
-        setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null); setCritic(null); setPlaybook(null); setTurnRisk({}); lastCaller.current = null;
+        setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null); setCritic(null); setPlaybook(null); setMyLabel(null); setTurnRisk({}); lastCaller.current = null;
         setM({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null, takeback: null });
         setInterim(""); setSpeaking(null); setAutoAt(null);
         micStop.current?.(); micStop.current = micNext.current; micNext.current = null;
@@ -487,7 +488,7 @@ export function DeskPage() {
               <div className="ask">
                 Was this a scam?
                 {(["scam", "legit", "unknown"] as Label[]).map((l) => (
-                  <button key={l} className={`chip${critic?.label === l ? " on" : ""}`} onClick={() => { setCritic(null); send({ type: "call.label", label: l }); }}>
+                  <button key={l} className={`chip${myLabel === l ? " on" : ""}`} onClick={() => { setCritic(null); setMyLabel(l); send({ type: "call.label", label: l }); }}>
                     {l === "scam" ? "Yes" : l === "legit" ? "No" : "Not sure"}
                   </button>
                 ))}
@@ -495,12 +496,22 @@ export function DeskPage() {
               {!critic && <span className="pending">The critic is reviewing the call</span>}
               {critic && (
                 <>
+                  {critic.report.ownVerdict && (
+                    <p className="why" style={{ marginBottom: 10 }}>
+                      <b>Critic's own call: {critic.report.ownVerdict.call === "scam" ? "scam" : critic.report.ownVerdict.call === "legit" ? "legitimate" : "unclear"}, {Math.round(critic.report.ownVerdict.confidence * 100)}% sure.</b> {critic.report.ownVerdict.reasons}
+                    </p>
+                  )}
+                  {critic.report.alexOpinion && (
+                    <p className="hint" style={{ marginBottom: 10 }}>You said {critic.report.alexOpinion.label === "scam" ? "it was a scam" : critic.report.alexOpinion.label === "legit" ? "it was legitimate" : "you weren't sure"}. The critic {critic.report.alexOpinion.agrees ? "agrees" : "disagrees and keeps its own verdict"}: {critic.report.alexOpinion.note}</p>
+                  )}
                   <div className="grades">
                     {(Object.keys(GRADE) as (keyof typeof GRADE)[]).map((g) => (
                       <div key={g} className="grade"><small>{GRADE[g]}</small><b className="num">{critic.report.grades[g]}<span>/5</span></b></div>
                     ))}
                   </div>
+                  {critic.report.caps && critic.report.caps.length > 0 && <p className="capnote">Capped by the facts: {critic.report.caps.join("; ")}</p>}
                   <p style={{ marginBottom: 10 }}>{critic.report.summary}</p>
+                  <p className="hint" style={{ marginBottom: 10 }}><a className="more" href="/reviews">See all reviews</a>{"  "}<a className="more" href="/evals" style={{ marginLeft: 14 }}>Open the evals dashboard</a></p>
                   <p className="judge">
                     {critic.metrics.verdictCorrect === null ? "No label yet." : critic.metrics.verdictCorrect ? "Right verdict." : "Wrong verdict."}
                     {" "}Reached High {critic.metrics.reachedHighAt ? `on caller line ${critic.metrics.reachedHighAt}` : "never"};
