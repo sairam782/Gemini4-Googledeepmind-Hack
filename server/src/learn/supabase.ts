@@ -34,7 +34,7 @@ export class SupabaseStore implements LearningStore {
       ssl: local && url.searchParams.get("sslmode") === "disable" ? false : ((ca) => (ca ? { ca, rejectUnauthorized: true } : "verify-full"))(supabaseCa()),
       prepare: false,
       max: 5,
-      connect_timeout: 5,
+      connect_timeout: 15, // a cold pooler + TLS handshake can take a few seconds
       idle_timeout: 20,
     });
   }
