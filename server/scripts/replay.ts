@@ -27,7 +27,9 @@ function logger(t0: number, prefix: string) {
 }
 
 async function run(sc: Scenario, verbose: boolean): Promise<CallReview> {
-  const call = new LiveCall(`${sc.id}-replay`, { from: sc.from, inContacts: sc.inContacts }, sc.expected);
+  // Scripted lines don't react to the agent, so there's nothing to learn about questions here:
+  // the review runs, the critic doesn't (use scripts/learn.ts for that).
+  const call = new LiveCall(`${sc.id}-replay`, { from: sc.from, inContacts: sc.inContacts }, sc.expected, { source: "desk", scenarioId: sc.id, autoLearn: false });
   if (verbose) call.subscribe(logger(Date.now(), ""));
   const review = new Promise<CallReview>((resolve) => call.subscribe((m) => m.type === "call.review" && resolve(m.review), false));
   call.brain.addTurn("alex", "Hello?");

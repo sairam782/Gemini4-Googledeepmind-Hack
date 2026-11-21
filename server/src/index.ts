@@ -7,6 +7,7 @@ import { DeskSession } from "./desk.ts";
 import { calls, findCall } from "./call.ts";
 import { handleTwilioStream, twiml } from "./twilio.ts";
 import type { DeskClientMsg } from "../../shared/brain.ts";
+import { devRunnerOn, isLocal, listRuns, runStatus, startRun } from "./devrun.ts";
 
 const PORT = Number(process.env.API_PORT || 8787);
 const rooms = new Map<string, CallRoom>();
@@ -28,6 +29,21 @@ const http = createServer(async (req, res) => {
       const call = findCall(decodeURIComponent(rev[1]));
       if (!call) return json(res, 404, { error: "no such call" });
       return json(res, call.review ? 200 : 202, call.review ?? { pending: true, ended: call.ended });
+    }
+    // Dev runner (localhost only): start a test script, read its log. See devrun.ts.
+    if (req.url?.startsWith("/api/dev/") && devRunnerOn()) {
+      if (!isLocal(req.socket.remoteAddress)) return json(res, 403, { error: "localhost only" });
+      if (req.method === "POST" && req.url === "/api/dev/run") {
+        const { script, args } = JSON.parse(await body(req)) as { script?: string; args?: unknown };
+        const r = startRun(String(script ?? ""), args);
+        return json(res, r.error ? 400 : 202, r);
+      }
+      if (req.method === "GET" && req.url === "/api/dev/runs") return json(res, 200, listRuns());
+      const m = req.method === "GET" && /^\/api\/dev\/runs\/([\w.-]+)$/.exec(req.url);
+      if (m) {
+        const st = runStatus(m[1]);
+        return st ? json(res, 200, st) : json(res, 404, { error: "no such run" });
+      }
     }
     if (req.method === "POST" && req.url === "/api/tts") {
       const { text, voice } = JSON.parse(await body(req)) as { text?: string; voice?: string };
@@ -108,7 +124,10 @@ function body(req: IncomingMessage): Promise<string> {
     let s = "";
     req.on("data", (c) => {
       s += c;
-      if (s.length > 10_000) req.destroy();
+      if (s.length > 10_000) {
+        reject(new Error("body too large"));
+        req.destroy();
+      }
     });
     req.on("end", () => resolve(s));
     req.on("error", reject);

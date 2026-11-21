@@ -4,3 +4,6 @@ dist/
 .env.local
 *.log
 .DS_Store
+
+# review-phase memory (calls, critic reports, playbook versions); a database replaces this later
+server/data/

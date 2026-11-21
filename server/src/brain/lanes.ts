@@ -1,6 +1,7 @@
 import type { Direction, DirectionCategory, Turn } from "../../../shared/brain.ts";
 import { SIGNS, SIGN_IDS, guardSay } from "./catalog.ts";
 import { generateJson, MODELS, thinkingFor, type Thinking } from "./llm.ts";
+import type { ActivePlaybook } from "../learn/playbook.ts";
 
 export const NOTE_FIELDS = [
   "Says they are", "Calling from", "Story", "Request", "Amount", "How to pay",
@@ -19,7 +20,15 @@ const callLine = (ctx: CallContext) => `Call: from ${ctx.from} (${ctx.inContacts
 export interface CallContext {
   from: string;
   inContacts: boolean;
+  /** Lessons from earlier calls (the critic's playbook). Absent = no lessons. */
+  playbook?: ActivePlaybook;
 }
+
+/** The playbook's advice for a lane, as a prompt section ("" when there is none). */
+const lessons = (ctx: CallContext, kind: "planner" | "detection") => {
+  const text = kind === "planner" ? ctx.playbook?.plannerText : ctx.playbook?.detectionText;
+  return text ? `\nLessons from Alex's earlier calls (playbook v${ctx.playbook!.version}; follow them when they fit this call):\n${text}\n` : "";
+};
 export interface SignHit {
   id: string;
   evidenceTurnId: string;
@@ -27,11 +36,11 @@ export interface SignHit {
 
 // ---------------------------------------------------------------- Risk (Hydrogen): signs on the newest turn
 
-export async function riskCheck(turns: Turn[], newest: Turn) {
+export async function riskCheck(ctx: CallContext, turns: Turn[], newest: Turn) {
   const prompt = `You flag scam warning signs in the NEWEST caller turn of a live phone call to Alex.
 Judge only what is said, never how the voice sounds. Flag a sign only if it is clearly present in the newest caller turn.
 ${NOT_SIGNS}
-
+${lessons(ctx, "detection")}
 Allowed sign ids:
 ${catalogText}
 
@@ -84,7 +93,7 @@ Warning signs so far: ${input.signs.join(", ") || "none"}
 Notes: ${JSON.stringify(input.notes)}
 On Alex's screen now: ${JSON.stringify(input.onScreen)}
 Categories already asked: ${JSON.stringify(input.asked)}. Already answered: ${JSON.stringify(input.answered)}.
-${input.strategy ? `Strategy from the senior planner (written after ${input.strategy.turnId}; follow it if it still fits): ${input.strategy.text}
+${lessons(input.ctx, "planner")}${input.strategy ? `Strategy from the senior planner (written after ${input.strategy.turnId}; follow it if it still fits): ${input.strategy.text}
 ` : ""}
 Always write exactly 3 options, even if the screen already has good ones (refresh them for the newest line). Categories: ${CATEGORIES.join(", ")}.
 - "say": the exact sentence, under 25 words, one question or statement, calm and polite.
@@ -194,7 +203,7 @@ export async function supervise(input: SupervisorInput) {
   const prompt = `You supervise ReVoice, which helps Alex handle a live phone call. An AI assistant may speak to the caller for Alex.
 Check the caller's STORY across the whole call, never the voice.
 ${NOT_SIGNS}
-
+${lessons(input.ctx, "detection")}
 ${callLine(input.ctx)}
 Transcript:
 ${transcriptText(input.turns)}

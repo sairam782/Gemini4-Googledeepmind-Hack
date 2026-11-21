@@ -4,6 +4,22 @@ import { INTRO, STOCK, guardSay } from "./brain/catalog.ts";
 import { renderSpeech, ttsEnabled } from "./tts.ts";
 import { reviewCall } from "./brain/review.ts";
 import type { CallContext } from "./brain/lanes.ts";
+import { buildRecord } from "./learn/record.ts";
+import { playbookForNextCall, reviewAndLearn } from "./learn/pipeline.ts";
+import type { CallRecord, Label } from "./learn/types.ts";
+
+/** LEARN=0 turns the review phase off (no playbook loaded, no critic after hang-up). */
+const learningOn = () => process.env.LEARN !== "0";
+
+export interface CallMeta {
+  source: CallRecord["source"];
+  scenarioId?: string;
+  personaId?: string;
+  label?: Label;
+  labelSource?: CallRecord["labelSource"];
+  /** false: don't run the critic automatically after the review (eval rounds call it themselves). */
+  autoLearn?: boolean;
+}
 
 type ControlMsg = Extract<DeskClientMsg, { actionId: string }>;
 type Listener = (m: DeskServerMsg) => void;
@@ -39,12 +55,20 @@ export class LiveCall {
   voice: AgentVoice | null = null;
   lineInfo: () => { nextLine: number; totalLines: number } = () => ({ nextLine: 0, totalLines: 0 });
 
+  readonly ctx: CallContext;
+  private meta: CallMeta;
+  private learning: Promise<void> | null = null;
+
   constructor(
     readonly id: string,
     ctx: CallContext,
     private expected?: { level: Level; verdict: string },
+    meta: CallMeta = { source: "phone" },
   ) {
-    this.brain = new CallBrain(ctx, (m) => this.emit(m), () => this.revision);
+    // Each call starts from the current playbook, unless the caller (an eval run) chose one.
+    this.ctx = { ...ctx, playbook: ctx.playbook ?? (learningOn() ? playbookForNextCall() : undefined) };
+    this.meta = { ...meta, label: meta.label ?? (expected ? (expected.level === "High" ? "scam" : "legit") : "unknown"), labelSource: meta.labelSource ?? (expected ? "scenario" : "none") };
+    this.brain = new CallBrain(this.ctx, (m) => this.emit(m), () => this.revision);
     this.brain.holdUpgrades = () => this.floor === "agent";
     // Warm the speech cache with every line the agent can say before any model has run.
     if (ttsEnabled()) [INTRO, ...STOCK.map((d) => d.say)].forEach((t) => void renderSpeech(t).catch(() => {}));
@@ -67,6 +91,11 @@ export class LiveCall {
 
   state() {
     this.emit({ type: "state", floor: this.floor, revision: this.revision, ...this.lineInfo() });
+  }
+
+  /** Every event so far (the call's log). */
+  events(): readonly DeskServerMsg[] {
+    return this.history;
   }
 
   get ended() {
@@ -175,13 +204,21 @@ export class LiveCall {
 
   end(reason: string) {
     if (this.ended) return;
-    if (this.speaking) this.voice?.cut(this.speaking);
+    if (this.speaking) {
+      this.voice?.cut(this.speaking);
+      this.brain.cutTurn(this.speaking);
+      this.emit({ type: "agent.cut", turnId: this.speaking });
+      this.speaking = null;
+    }
     this.floor = "ended";
     this.revision++;
     this.brain.ended = true;
     this.emit({ type: "call.ended", reason });
     this.state();
-    void this.runReview();
+    void this.runReview().catch((e) => {
+      console.error("[review] failed:", e);
+      this.emit({ type: "error", message: `review failed: ${(e as Error).message}` });
+    });
   }
 
   private async runReview() {
@@ -192,5 +229,52 @@ export class LiveCall {
     this.emit({ type: "lane.result", lane: "review", model: review.model, turnId: snap.turns.at(-1)!.turnId, ms: review.ms, ok: !review.summary.startsWith("Review model failed"), note: `${review.verdict}; ${review.evals.filter((e) => e.pass).length}/${review.evals.length} evals pass` });
     this.emit({ type: "call.review", review });
     setTimeout(() => calls.delete(this.id), 30 * 60_000); // keep reviews readable for a while
+    if (learningOn() && this.meta.autoLearn !== false) await this.learn();
+  }
+
+  /** Review phase: judge + critic + playbook update. Resolves when done (eval scripts await it). */
+  learn(): Promise<void> {
+    const job = async () => {
+      const record = this.record();
+      const out = await reviewAndLearn(record);
+      this.emit({ type: "critic.report", report: out.critic, metrics: out.metrics, label: record.label });
+      if (out.update) {
+        this.emit({
+          type: "playbook.updated",
+          update: out.update,
+          version: out.playbook.version,
+          active: out.playbook.lessons.filter((l) => l.status === "active").map(({ id, when, do: d, action, seen }) => ({ id, when, do: d, action, seen })),
+        });
+      }
+    };
+    // One review at a time per call; a label that arrives mid-review re-runs it afterwards.
+    this.learning = (this.learning ?? Promise.resolve()).then(job, job).catch((e) => {
+      console.error("[learn] failed:", e);
+      this.emit({ type: "error", message: `critic failed: ${(e as Error).message}` });
+    });
+    return this.learning;
+  }
+
+  /** The call as the review phase stores it. */
+  record(): CallRecord {
+    return buildRecord(this.history, {
+      callId: this.id,
+      source: this.meta.source,
+      scenarioId: this.meta.scenarioId,
+      personaId: this.meta.personaId,
+      from: this.ctx.from,
+      inContacts: this.ctx.inContacts,
+      label: this.meta.label ?? "unknown",
+      labelSource: this.meta.labelSource ?? "none",
+      playbookVersion: this.ctx.playbook?.version ?? 0,
+      guardBlocks: this.guardBlocks,
+    });
+  }
+
+  /** Alex answered "Was this a scam?" after hang-up. The critic re-runs with the real label. */
+  setLabel(label: Label) {
+    if (!this.ended) return this.emit({ type: "error", message: "label the call after it ends" });
+    this.meta = { ...this.meta, label, labelSource: "alex" };
+    if (learningOn() && this.review) void this.learn();
   }
 }

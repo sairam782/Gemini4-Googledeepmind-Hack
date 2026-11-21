@@ -20,6 +20,7 @@ Each finished caller line is sent to every lane at once. The app merges the resu
 | Alex's panel | app | `/desk` today, phone app next | – | Notes, signs, 3 directions, take over / take back. |
 | Pre-render speech | tts | `gemini-3.8-flash-tts` (`TTS_MODEL`) | cached | Every suggested line is rendered as it arrives, so a tap starts speaking in ~10 ms. |
 | Call review | review | `gemini-4-carbon` (`REVIEW_MODEL`) | ~5 s after hang-up | Summary, verdict, follow-up drafts. Evals are computed in code. |
+| Critic | critic | `gemini-4-neon`, high thinking (`CRITIC_MODEL`) | ~20–60 s after hang-up | Grades the call, finds missed or late signs and badly timed questions, writes lessons into the playbook the next call uses. |
 | Follow-up agent | – | Gemini Managed Agents | **not built** | Today Carbon drafts the follow-ups. Acting on them (with Alex's approval) is the next step. |
 
 How the directions board fills in on each caller line:
@@ -71,6 +72,38 @@ Latest `replay.ts all` run: **56/56 evals pass**.
 - The agent spoke no codes and no private analysis.
 
 `sim-twilio.ts` streams the scenario as real 8 kHz µ-law phone audio into `/twilio`. It joins as Alex's app, takes over, picks a direction, takes back mid-sentence and hangs up, so it exercises the whole phone path without a Twilio account.
+
+## Review phase: the agent learns after every call
+
+After hang-up the call goes through four steps. Code makes every decision that changes behaviour; the model only proposes.
+
+| Step | What | Where |
+|---|---|---|
+| Record | The call's event log becomes a `CallRecord`: transcript, the meter after each caller line, every card shown, what the agent said and from which card. | `server/src/learn/record.ts` |
+| Judge (code) | Right verdict? False alarm? Caller line where it reached High, where money came up, where the first identity check or callback was suggested and asked, repeated questions, leaks. | `judge()` in `record.ts` |
+| Critic | **Gemini 4 Neon, high thinking** (`CRITIC_MODEL`). Grades classification, questioning, timing and safety 1–5, writes findings that cite turns, and proposes up to 3 general lessons. | `server/src/learn/critic.ts` |
+| Playbook | Lessons are validated, merged (duplicates reinforce, minor ones wait for a second sighting), capped at 10 active and versioned. Weight changes must pass a replay gate on every stored labeled call. | `server/src/learn/playbook.ts`, `pipeline.ts` |
+
+What a lesson can change, enforced in code:
+- `prefer_direction`: when these signs are present, this card is the Suggested one (stock and model boards).
+- `adjust_weight`: a sign's weight moves by ±1, at most ±2 in total, and a warning sign never becomes reassuring.
+- `planner_hint` / `detection_hint`: text added to the planner, risk and supervisor prompts.
+
+Lessons can never touch the safety rules: unsafe wording is refused, and the say-guard still checks every spoken line.
+
+The next call starts from the current playbook (`LEARN=0` turns this off). The desk shows the critic's report, the label buttons ("Was this a scam?") and the playbook change under the call review.
+
+```bash
+cd server
+npm run test:learn                          # offline checks, no Gemini calls
+npm run learn -- --rounds 3 --fresh         # simulated calls → critic → playbook, rounds with a held-out set
+npm run learn -- --show                     # print the playbook
+npm run learn -- --rollback 2               # make v2 current again
+```
+
+`learn` runs simulated callers (`personas.ts`) that answer what the agent actually asks, with autopilot-Alex tapping the Suggested card, so a better question at a better time changes the call. Train personas feed the critic; held-out personas are only scored. A round's playbook is rolled back if held-out calls get a new false alarm, catch fewer scams, leak anything or get worse questioning grades.
+
+Storage is JSON files under `server/data/learning/` (git-ignored) behind the `LearningStore` interface in `store.ts`, so a database can replace it without touching the rest.
 
 ## Phone (Twilio)
 

@@ -11,6 +11,9 @@ export const SIGNS: Record<string, { label: string; weight: number }> = {
   emergency: { label: "Emergency story (accident, arrest, hospital)", weight: 2 },
   new_number: { label: "New number or \"lost my phone\"", weight: 2 },
   secrecy: { label: "Secrecy (\"don't tell Mom\")", weight: 2 },
+  // Added after the first learning rounds: impostor calls (tax agency, bank) threaten instead of pleading,
+  // and none of the signs above caught "a warrant will be issued" or "the account gets frozen".
+  threat: { label: "Threatens arrest, a warrant, legal action, fines or a frozen account", weight: 2 },
   story_changes: { label: "Story contradicts itself about who they are or why they need money", weight: 2 },
   family_pass: { label: "Passes the family question", weight: -5 },
   callback_accepted: { label: "Accepts a callback on the saved number", weight: -4 },
