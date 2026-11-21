@@ -4,7 +4,8 @@
 export type Speaker = "caller" | "alex" | "agent";
 export type Floor = "alex" | "agent" | "ended";
 export type Level = "Low" | "Medium" | "High";
-export type Lane = "rules" | "hydrogen" | "planner" | "neon";
+/** One lane per box in the architecture diagram (README). */
+export type Lane = "rules" | "flash" | "risk" | "notes" | "planner" | "supervisor" | "review";
 
 export interface Turn {
   turnId: string; // "t1", "t2", ...
@@ -41,7 +42,7 @@ export interface Direction {
   why: string;
   whyTurnId: string | null;
   suggested: boolean;
-  source: "stock" | "planner";
+  source: "stock" | "flash" | "planner";
   revision: number;
 }
 
@@ -56,9 +57,23 @@ export interface ScenarioInfo {
   expected: { level: Level; verdict: string };
 }
 
-/** Desk (test harness) → server */
+export interface CallReview {
+  callId: string;
+  model: string;
+  ms: number;
+  summary: string;
+  verdict: "scam" | "legit" | "unclear";
+  finalLevel: Level;
+  locked: boolean;
+  followUps: { action: string; why: string }[]; // drafts only: Alex approves each one
+  evals: { name: string; pass: boolean; detail: string }[];
+  latency: Partial<Record<Lane, { runs: number; medianMs: number; failures: number }>>;
+}
+
+/** Desk (test harness) or phone app → server. The app joins a live phone call by callId ("latest" = newest). */
 export type DeskClientMsg =
   | { type: "join"; role: "desk"; callId: string }
+  | { type: "join"; role: "app"; callId: string }
   | { type: "desk.start"; scenarioId: string }
   | { type: "desk.next" } // play the next scripted caller line
   | { type: "desk.say"; speaker: "caller" | "alex"; text: string } // type a line live
@@ -75,6 +90,8 @@ export type DeskServerMsg =
   | { type: "call.ended"; reason: string }
   | { type: "state"; floor: Floor; revision: number; nextLine: number; totalLines: number }
   | { type: "turn.final"; turn: Turn }
+  | { type: "caption.interim"; speaker: Speaker; text: string } // live words before the line is final
+  | { type: "call.review"; review: CallReview }
   | { type: "agent.say"; turnId: string; text: string; revision: number; directionId: string | null }
   | { type: "agent.cut"; turnId: string }
   | { type: "risk.signal"; sign: Sign }

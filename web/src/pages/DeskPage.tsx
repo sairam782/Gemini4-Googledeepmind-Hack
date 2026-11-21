@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type {
-  DeskClientMsg, DeskServerMsg, Direction, Floor, Lane, RiskLevel, ScenarioInfo, Sign, Turn,
+  CallReview, DeskClientMsg, DeskServerMsg, Direction, Floor, Lane, RiskLevel, ScenarioInfo, Sign, Turn,
 } from "../../../shared/brain.ts";
 import { VoicePlayer } from "../lib/voice.ts";
 
 const AGENT_VOICE = "Kore";
+const LANE_NAMES: Record<Exclude<Lane, "review">, string> = {
+  rules: "Rules", flash: "Flash-Lite", risk: "Risk (Hydrogen)", notes: "Notes (Hydrogen)", planner: "Planner (Argon)", supervisor: "Supervisor (Neon)",
+};
 const CALLER_VOICE = "Puck";
 const uid = () => crypto.randomUUID();
 
@@ -35,6 +38,7 @@ export function DeskPage() {
   const [voiceOn, setVoiceOn] = useState(true);
   const [auto, setAuto] = useState(false);
   const [typed, setTyped] = useState("");
+  const [review, setReview] = useState<CallReview | null>(null);
   const [m, setM] = useState({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null as number | null, takeback: null as number | null });
 
   const sock = useRef<WebSocket | null>(null);
@@ -86,7 +90,7 @@ export function DeskPage() {
       case "call.started":
         setScenario(msg.scenario);
         setScript(msg.script);
-        setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({});
+        setTurns([]); setSigns({}); setRisk(null); setNotes({}); setDecision(null); setDirs([]); setWithdrawn([]); setLanes({}); setReview(null);
         setM({ accepted: 0, rejected: 0, cuts: 0, tapToAudio: null, takeback: null });
         if (refs.current.voiceOn) msg.script.forEach((l) => void player().clip(l, CALLER_VOICE).catch(() => {}));
         void player().clip("Hi, I'm Alex's AI assistant. Alex is listening. Who's calling, and how can I help?", AGENT_VOICE).catch(() => {});
@@ -138,6 +142,9 @@ export function DeskPage() {
       case "action.rejected":
         setM((x) => ({ ...x, rejected: x.rejected + 1 }));
         flash(`Tap rejected: ${msg.reason}`);
+        break;
+      case "call.review":
+        setReview(msg.review);
         break;
       case "call.ended":
         player().stop();
@@ -227,7 +234,7 @@ export function DeskPage() {
       <div className="top">
         <div>
           <h1>Brain test desk</h1>
-          <p className="hint" style={{ margin: 0 }}>Scripted calls stand in for Twilio. Every caller line runs the rules, Hydrogen check, Hydrogen planner and Neon analyst.</p>
+          <p className="hint" style={{ margin: 0 }}>Scripted calls stand in for Twilio. Every caller line fans out to the rules, Flash-Lite, Hydrogen risk and notes, Argon planner and Neon supervisor. Carbon reviews the call after hang-up.</p>
         </div>
         <div className="ctl">
           <select value={scenarioId} onChange={(e) => setScenarioId(e.target.value)}>
@@ -259,9 +266,9 @@ export function DeskPage() {
 
       <div className="hud">
         <span>Server <b>{ws}</b></span>
-        {(["rules", "hydrogen", "planner", "neon"] as Lane[]).map((l) => (
+        {(Object.keys(LANE_NAMES) as (keyof typeof LANE_NAMES)[]).map((l) => (
           <span key={l} title={lanes[l]?.note}>
-            {l === "rules" ? "Rules" : l === "hydrogen" ? "Hydrogen check" : l === "planner" ? "Planner (Hydrogen)" : "Neon analyst"}{" "}
+            {LANE_NAMES[l]}{" "}
             <b style={{ color: lanes[l] && !lanes[l]!.ok ? "var(--bad)" : undefined }}>{lanes[l] ? `${lanes[l]!.ms} ms` : "–"}</b>
           </span>
         ))}
@@ -283,7 +290,7 @@ export function DeskPage() {
             <div className="dirs">
               {dirs.map((d) => (
                 <button key={d.id} className="dir" onClick={() => pick(d)} disabled={floor !== "agent" || !!speaking}>
-                  <span className="l">{d.label}{d.suggested && <span className="rec">Suggested</span>}<span className={`src ${d.source}`}>{d.source === "planner" ? "Hydrogen" : "instant"}</span></span>
+                  <span className="l">{d.label}{d.suggested && <span className="rec">Suggested</span>}<span className={`src ${d.source}`}>{d.source === "planner" ? "Argon" : d.source === "flash" ? "Flash-Lite" : "instant"}</span></span>
                   <span className="say">Will say: “{d.say}”</span>
                   <span className="why">Why: {d.why} {d.whyTurnId && <em>· {turnN(d.whyTurnId)}</em>}</span>
                 </button>
@@ -353,6 +360,15 @@ export function DeskPage() {
           </section>
         </div>
       </div>
+
+      {review && (
+        <section className="card" style={{ marginTop: 14 }}>
+          <div className="ch"><h2>Call review</h2><span className="tag">{review.model} · {review.ms} ms</span></div>
+          <p><b>{review.verdict}</b> · {review.finalLevel}{review.locked ? " (locked)" : ""}. {review.summary}</p>
+          {review.followUps.map((f, i) => <div key={i} className="note">Follow-up: <strong>{f.action}</strong> <span className="was">{f.why}</span></div>)}
+          {review.evals.map((e, i) => <div key={i} className="hint" style={{ margin: 0 }}>{e.pass ? "✓" : "✗"} {e.name}: {e.detail}</div>)}
+        </section>
+      )}
 
       <details style={{ marginTop: 14 }}>
         <summary className="hint">Event stream ({events.length})</summary>

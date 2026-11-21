@@ -2,10 +2,20 @@ import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
 const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
 
+/** One model per lane, as in the architecture diagram. Each can be swapped from .env. */
 export const MODELS = {
-  fast: process.env.FAST_MODEL || "gemini-4-hydrogen",
-  planner: process.env.PLANNER_MODEL || "gemini-4-hydrogen",
-  analyst: process.env.ANALYST_MODEL || "gemini-4-neon",
+  flash: process.env.FLASH_MODEL || "gemini-3.5-flash-lite",
+  risk: process.env.RISK_MODEL || process.env.FAST_MODEL || "gemini-4-hydrogen",
+  notes: process.env.NOTES_MODEL || "gemini-4-hydrogen",
+  planner: process.env.PLANNER_MODEL || "gemini-4-argon",
+  supervisor: process.env.SUPERVISOR_MODEL || process.env.ANALYST_MODEL || "gemini-4-neon",
+  review: process.env.REVIEW_MODEL || "gemini-4-carbon",
+};
+export type Thinking = "low" | "high" | undefined;
+/** "none" in .env means: send no thinking config (for models that don't take one). */
+export const thinkingFor = (envName: string, fallback: Thinking): Thinking => {
+  const v = process.env[envName];
+  return v === "none" ? undefined : (v as Thinking) || fallback;
 };
 
 export interface JsonResult<T> {

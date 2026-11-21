@@ -4,6 +4,8 @@ import type { ClientMsg, Role } from "../../shared/protocol.ts";
 import { CallRoom } from "./room.ts";
 import { renderSpeech, ttsEnabled } from "./tts.ts";
 import { DeskSession } from "./desk.ts";
+import { calls, findCall } from "./call.ts";
+import { handleTwilioStream, twiml } from "./twilio.ts";
 import type { DeskClientMsg } from "../../shared/brain.ts";
 
 const PORT = Number(process.env.API_PORT || 8787);
@@ -12,7 +14,20 @@ const rooms = new Map<string, CallRoom>();
 const http = createServer(async (req, res) => {
   try {
     if (req.method === "GET" && req.url === "/api/health") {
-      return json(res, 200, { ok: true, tts: ttsEnabled(), rooms: rooms.size });
+      return json(res, 200, { ok: true, tts: ttsEnabled(), rooms: rooms.size, calls: [...calls.keys()] });
+    }
+    // Twilio voice webhook → TwiML that streams the call to /twilio.
+    if (req.method === "POST" && req.url?.startsWith("/twilio/voice")) {
+      const form = new URLSearchParams(await body(req));
+      const host = process.env.PUBLIC_HOST || req.headers["x-forwarded-host"] || req.headers.host || "";
+      res.writeHead(200, { "content-type": "text/xml" });
+      return res.end(twiml(String(host), form.get("From") || "unknown"));
+    }
+    const rev = req.method === "GET" && /^\/api\/calls\/([^/]+)\/review$/.exec(req.url ?? "");
+    if (rev) {
+      const call = findCall(decodeURIComponent(rev[1]));
+      if (!call) return json(res, 404, { error: "no such call" });
+      return json(res, call.review ? 200 : 202, call.review ?? { pending: true, ended: call.ended });
     }
     if (req.method === "POST" && req.url === "/api/tts") {
       const { text, voice } = JSON.parse(await body(req)) as { text?: string; voice?: string };
@@ -30,7 +45,15 @@ const http = createServer(async (req, res) => {
   }
 });
 
-const wss = new WebSocketServer({ server: http, path: "/ws" });
+const wss = new WebSocketServer({ noServer: true });
+const twilioWss = new WebSocketServer({ noServer: true });
+twilioWss.on("connection", handleTwilioStream);
+http.on("upgrade", (req, socket, head) => {
+  const path = (req.url ?? "").split("?")[0];
+  if (path === "/ws") wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+  else if (path === "/twilio") twilioWss.handleUpgrade(req, socket, head, (ws) => twilioWss.emit("connection", ws, req));
+  else socket.destroy();
+});
 
 wss.on("connection", (ws: WebSocket) => {
   let room: CallRoom | null = null;
@@ -45,9 +68,9 @@ wss.on("connection", (ws: WebSocket) => {
       return;
     }
     if (desk) return desk.handle(msg as DeskClientMsg);
-    if (msg.type === "join" && msg.role === "desk") {
-      desk = new DeskSession(ws);
-      console.log("desk joined");
+    if (msg.type === "join" && (msg.role === "desk" || msg.role === "app")) {
+      desk = new DeskSession(ws, msg.role, msg.callId);
+      console.log(`${msg.role} joined${msg.role === "app" ? ` ${msg.callId}` : ""}`);
       return;
     }
     if (msg.type === "join") {

@@ -3,7 +3,7 @@ import type {
 } from "../../../shared/brain.ts";
 import { SIGNS, STOCK, scoreRisk } from "./catalog.ts";
 import { flagTurn } from "./rules.ts";
-import { analyze, fastCheck, plan, type CallContext } from "./lanes.ts";
+import { plan, riskCheck, supervise, takeNotes, type CallContext } from "./lanes.ts";
 
 /** Runs a job with at most one in flight; calls made meanwhile collapse into one rerun. */
 class SingleFlight {
@@ -27,13 +27,14 @@ class SingleFlight {
 }
 
 /**
- * The brain for one call. Every caller turn fans out to four lanes in parallel:
- *   rules     (~1 ms)   provisional signs + stock directions, so the panel reacts at once
- *   hydrogen  (~2-4 s)  fast check of the newest turn → provisional signs
- *   planner   (~5-8 s)  Hydrogen writes the next 3 directions with exact words
- *   neon      (~12-20 s) confirms/removes signs, writes notes and the open decision
- * App code merges the results: the score and lock rule live here, not in a model,
- * and directions computed for an older caller turn are never shown.
+ * The brain for one call (README diagram). Every caller turn fans out in parallel:
+ *   rules + flash  fast lane: regex signs and stock directions at once, Flash-Lite tailored directions in ~1-2 s
+ *   risk           Hydrogen: provisional signs on the newest turn
+ *   notes          Hydrogen: facts with corrections, the open decision
+ *   planner        Argon: the next 3 directions with exact words
+ *   supervisor     Neon: confirms or removes signs across the call, vetoes unsafe directions
+ * App code merges: the score and lock rule live here, directions for an older caller turn are
+ * dropped, and a slower lane never overwrites a faster one's work for a newer turn.
  */
 export class CallBrain {
   readonly turns: Turn[] = [];
@@ -41,12 +42,14 @@ export class CallBrain {
   private notes = new Map<string, { value: string; turnId: string }>();
   private directions: Direction[] = [];
   private directionsFor: string | null = null; // caller turn the on-screen directions respond to
+  private plannerFor: string | null = null; // caller turn the planner last answered
   private asked: DirectionCategory[] = [];
   private answered = new Set<DirectionCategory>();
   private locked = false;
   private seq = 0;
   private planner: SingleFlight;
-  private analyst: SingleFlight;
+  private notesLane: SingleFlight;
+  private supervisor: SingleFlight;
   ended = false;
 
   constructor(
@@ -55,7 +58,8 @@ export class CallBrain {
     private revision: () => number,
   ) {
     this.planner = new SingleFlight(() => this.runPlanner(), () => !this.ended);
-    this.analyst = new SingleFlight(() => this.runAnalyst(), () => !this.ended);
+    this.notesLane = new SingleFlight(() => this.runNotes(), () => !this.ended);
+    this.supervisor = new SingleFlight(() => this.runSupervisor(), () => !this.ended);
   }
 
   // ---------------------------------------------------------------- turns
@@ -74,12 +78,38 @@ export class CallBrain {
     if (t) t.status = "cut";
   }
 
+  /** Read-only view for the call review after hang-up. */
+  snapshot() {
+    return {
+      turns: [...this.turns],
+      signs: [...this.signs.values()],
+      notes: Object.fromEntries([...this.notes].map(([k, v]) => [k, v.value])),
+      risk: scoreRisk([...this.signs.values()], this.locked),
+    };
+  }
+
   private lastCallerTurn() {
     return [...this.turns].reverse().find((t) => t.speaker === "caller") ?? null;
   }
 
+  private activeSignIds() {
+    return [...this.signs.values()].filter((s) => s.status !== "removed").map((s) => s.id);
+  }
+
+  private plannerInput(turns: Turn[]) {
+    return {
+      ctx: this.ctx,
+      turns,
+      signs: this.activeSignIds(),
+      notes: Object.fromEntries([...this.notes].map(([k, v]) => [k, v.value])),
+      onScreen: this.directions.map((d) => ({ category: d.category, label: d.label })),
+      asked: this.asked,
+      answered: [...this.answered],
+    };
+  }
+
   private onCallerTurn(turn: Turn) {
-    // Lane 1: rules (synchronous).
+    // Fast lane, part 1: rules (synchronous).
     const t0 = performance.now();
     const hits = flagTurn(turn.text);
     hits.forEach((id) => this.upsertSign(id, turn.turnId, "rules", "provisional"));
@@ -87,22 +117,31 @@ export class CallBrain {
     this.rescore();
     this.stockDirections(turn);
 
-    // Lane 2: Hydrogen fast check of this turn.
     const snapshot = [...this.turns];
-    void fastCheck(snapshot, turn).then((r) => {
+
+    // Fast lane, part 2: Flash-Lite drafts tailored directions while Argon thinks.
+    void plan(this.plannerInput(snapshot), "flash").then((r) => {
       if (this.ended) return;
-      this.emit({ type: "lane.result", lane: "hydrogen", model: r.model, turnId: turn.turnId, ms: r.ms, ok: r.ok, note: r.ok ? r.signs.map((s) => s.id).join(", ") || "no signs" : r.error });
-      const before = [...this.signs.values()].filter((s) => s.status !== "removed").length;
-      r.signs.forEach((s) => this.upsertSign(s.id, s.evidenceTurnId, "hydrogen", "provisional"));
-      const after = [...this.signs.values()].filter((s) => s.status !== "removed").length;
-      if (after === before) return;
+      const fresh = this.lastCallerTurn()?.turnId === turn.turnId && this.plannerFor !== turn.turnId;
+      this.emit({ type: "lane.result", lane: "flash", model: r.model, turnId: turn.turnId, ms: r.ms, ok: !!r.out, note: r.out ? `${r.out.directions.length} directions${fresh ? "" : " (not shown: planner or a newer turn got there first)"}${r.out.dropped.length ? `; guard dropped ${r.out.dropped.join("; ")}` : ""}` : r.error });
+      if (r.out?.directions.length && fresh) this.setDirections(r.out.directions.map((d) => ({ ...d, id: this.nextId(), source: "flash" as const, revision: this.revision() })), turn.turnId);
+    });
+
+    // Risk lane: Hydrogen check of this turn.
+    void riskCheck(snapshot, turn).then((r) => {
+      if (this.ended) return;
+      this.emit({ type: "lane.result", lane: "risk", model: r.model, turnId: turn.turnId, ms: r.ms, ok: r.ok, note: r.ok ? r.signs.map((s) => s.id).join(", ") || "no signs" : r.error });
+      const before = this.activeSignIds().length;
+      r.signs.forEach((s) => this.upsertSign(s.id, s.evidenceTurnId, "risk", "provisional"));
+      if (this.activeSignIds().length === before) return;
       this.rescore();
       if (this.directionsFor === turn.turnId && this.directions.every((d) => d.source === "stock")) this.stockDirections(turn);
     });
 
-    // Lanes 3 and 4: planner and analyst, one in flight each.
+    // Notes, planner and supervisor: one in flight each, reruns collapse.
+    this.notesLane.kick();
     this.planner.kick();
-    this.analyst.kick();
+    this.supervisor.kick();
   }
 
   // ---------------------------------------------------------------- signs and score
@@ -138,21 +177,13 @@ export class CallBrain {
     return !!s && s.status !== "removed";
   }
 
-  // ---------------------------------------------------------------- planner (Hydrogen)
+  // ---------------------------------------------------------------- planner (Argon)
 
   private async runPlanner() {
     const turns = [...this.turns];
     const forTurn = this.lastCallerTurn();
     if (!forTurn) return;
-    const r = await plan({
-      ctx: this.ctx,
-      turns,
-      signs: [...this.signs.values()].filter((s) => s.status !== "removed").map((s) => s.id),
-      notes: Object.fromEntries([...this.notes].map(([k, v]) => [k, v.value])),
-      onScreen: this.directions.map((d) => ({ category: d.category, label: d.label })),
-      asked: this.asked,
-      answered: [...this.answered],
-    });
+    const r = await plan(this.plannerInput(turns), "planner");
     if (this.ended) return;
     const stale = this.lastCallerTurn()?.turnId !== forTurn.turnId;
     const out = r.out;
@@ -166,41 +197,20 @@ export class CallBrain {
       for (const d of this.directions.filter((x) => x.category === a.category)) this.withdraw(d, "already answered", a.evidenceTurnId);
     }
     if (stale || !out.directions.length) return;
+    this.plannerFor = forTurn.turnId;
     this.setDirections(out.directions.map((d) => ({ ...d, id: this.nextId(), source: "planner" as const, revision: this.revision() })), forTurn.turnId);
   }
 
-  // ---------------------------------------------------------------- analyst (Neon)
+  // ---------------------------------------------------------------- notes (Hydrogen)
 
-  private async runAnalyst() {
-    const turns = [...this.turns];
+  private async runNotes() {
     const forTurn = this.lastCallerTurn();
     if (!forTurn) return;
-    const callerIds = new Set(turns.filter((t) => t.speaker === "caller").map((t) => t.turnId));
-    const r = await analyze({
-      ctx: this.ctx,
-      turns,
-      provisional: [...this.signs.values()].filter((s) => s.status === "provisional").map((s) => ({ id: s.id, evidenceTurnId: s.evidenceTurnId })),
-      notes: Object.fromEntries([...this.notes].map(([k, v]) => [k, v.value])),
-    });
+    const r = await takeNotes({ ctx: this.ctx, turns: [...this.turns], notes: Object.fromEntries([...this.notes].map(([k, v]) => [k, v.value])) });
     if (this.ended) return;
     const out = r.out;
-    this.emit({
-      type: "lane.result", lane: "neon", model: r.model, turnId: forTurn.turnId, ms: r.ms, ok: !!out,
-      note: out ? `${out.signs.length} signs, ${out.notes.length} notes${out.dropped.length ? `; dropped ${out.dropped.join("; ")}` : ""}` : r.error,
-    });
+    this.emit({ type: "lane.result", lane: "notes", model: r.model, turnId: forTurn.turnId, ms: r.ms, ok: !!out, note: out ? `${out.notes.length} notes${out.decision ? ", decision" : ""}` : r.error });
     if (!out) return;
-
-    // Neon's list confirms; provisional signs from turns it saw, which it left out, are removed.
-    const neonIds = new Set(out.signs.map((s) => s.id));
-    out.signs.forEach((s) => this.upsertSign(s.id, s.evidenceTurnId, "neon", "confirmed"));
-    for (const s of this.signs.values()) {
-      if (s.status === "provisional" && callerIds.has(s.evidenceTurnId) && !neonIds.has(s.id)) {
-        s.status = "removed";
-        this.emit({ type: "risk.signal", sign: s });
-      }
-    }
-    this.rescore();
-
     // A changed value keeps the old one as history ("was $280 · t4").
     for (const n of out.notes) {
       const cur = this.notes.get(n.field);
@@ -209,6 +219,46 @@ export class CallBrain {
       this.emit({ type: "notes.update", field: n.field, value: n.value, evidenceTurnId: n.evidenceTurnId, ...(cur ? { previous: { value: cur.value, turnId: cur.turnId } } : {}) });
     }
     if (out.decision) this.emit({ type: "decision.open", text: out.decision.text, evidenceTurnId: out.decision.evidenceTurnId });
+  }
+
+  // ---------------------------------------------------------------- supervisor (Neon)
+
+  private async runSupervisor() {
+    const turns = [...this.turns];
+    const forTurn = this.lastCallerTurn();
+    if (!forTurn) return;
+    const callerIds = new Set(turns.filter((t) => t.speaker === "caller").map((t) => t.turnId));
+    const r = await supervise({
+      ctx: this.ctx,
+      turns,
+      provisional: [...this.signs.values()].filter((s) => s.status === "provisional").map((s) => ({ id: s.id, evidenceTurnId: s.evidenceTurnId })),
+      onScreen: this.directions.map((d) => ({ id: d.id, label: d.label, say: d.say })),
+    });
+    if (this.ended) return;
+    const out = r.out;
+    this.emit({
+      type: "lane.result", lane: "supervisor", model: r.model, turnId: forTurn.turnId, ms: r.ms, ok: !!out,
+      note: out ? `${out.signs.length} signs${out.withdraw.length ? `, vetoed ${out.withdraw.length}` : ""}${out.dropped.length ? `; dropped ${out.dropped.join("; ")}` : ""}` : r.error,
+    });
+    if (!out) return;
+
+    // Neon's list confirms; provisional signs from turns it saw, which it left out, are removed.
+    const neonIds = new Set(out.signs.map((s) => s.id));
+    out.signs.forEach((s) => this.upsertSign(s.id, s.evidenceTurnId, "supervisor", "confirmed"));
+    for (const s of this.signs.values()) {
+      if (s.status === "provisional" && callerIds.has(s.evidenceTurnId) && !neonIds.has(s.id)) {
+        s.status = "removed";
+        this.emit({ type: "risk.signal", sign: s });
+      }
+    }
+    this.rescore();
+
+    for (const w of out.withdraw) {
+      const d = this.directions.find((x) => x.id === w.directionId);
+      if (!d) continue;
+      this.answered.add(d.category); // don't bring the same move straight back
+      this.withdraw(d, `supervisor: ${w.reason}`, forTurn.turnId);
+    }
 
     // Once locked, the stock board switches to callback / decline right away.
     const last = this.lastCallerTurn();

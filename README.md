@@ -1,6 +1,35 @@
 # Uno ReVoice
 
-A three-party call where the recipient (Alex) can hand the conversation to a clearly identified AI assistant, steer its next question in private, and take the call back in one tap. Gemini 4 NYC Hackathon.
+When a call comes in, Alex can hand it to a clearly identified AI assistant, steer its next line in private, and take the call back in one tap. Several Gemini models listen in parallel: they flag scam warning signs, keep notes, and suggest the next line. App code makes every decision that matters. Gemini 4 NYC Hackathon.
+
+## Architecture
+
+![ReVoice architecture](docs/architecture.png)
+
+Each finished caller line is sent to every lane at once. The app merges the results.
+
+| Box | Lane | Model (env) | Typical latency | Job |
+|---|---|---|---|---|
+| Caller turn | transcribe | `gemini-3.5-transcribe-live` (`TRANSCRIBE_MODEL`) | final line ~1 s after the caller stops | One Live session per phone track, so speakers are known without diarization. Interim words stream as captions. |
+| Fast lane | rules + flash | regex + `gemini-3.5-flash-lite` (`FLASH_MODEL`) | 1 ms / ~1.3 s | Instant signs and stock directions, then tailored directions in about a second. |
+| Risk | risk | `gemini-4-hydrogen` (`RISK_MODEL`) | ~3 s | Provisional warning signs on the newest line. |
+| Notes | notes | `gemini-4-hydrogen` (`NOTES_MODEL`) | ~4–5 s | Facts with corrections ("$230, was $280"), each citing its turn, plus the open decision. |
+| Planner | planner | `gemini-4-argon` (`PLANNER_MODEL`) | ~7–15 s | The next 3 directions with the exact words. Dropped if a newer caller line arrived first. |
+| Supervisor | supervisor | `gemini-4-neon` (`SUPERVISOR_MODEL`) | ~6–8 s | Reads the whole call: confirms or removes signs, vetoes unsafe or pointless directions. |
+| Merge and guard | app code | `server/src/brain/orchestrator.ts`, `catalog.ts` | – | Drops stale results, withdraws answered directions, scores risk with fixed weights, locks "High risk: confirmed", blocks unsafe words. |
+| Alex's panel | app | `/desk` today, phone app next | – | Notes, signs, 3 directions, take over / take back. |
+| Pre-render speech | tts | `gemini-3.8-flash-tts` (`TTS_MODEL`) | cached | Every suggested line is rendered as it arrives, so a tap starts speaking in ~10 ms. |
+| Call review | review | `gemini-4-carbon` (`REVIEW_MODEL`) | ~5 s after hang-up | Summary, verdict, follow-up drafts. Evals are computed in code. |
+| Follow-up agent | – | Gemini Managed Agents | **not built** | Today Carbon drafts the follow-ups. Acting on them (with Alex's approval) is the next step. |
+
+Lanes that are slower than one caller line run one at a time, and a newer line queues a single rerun, so they never pile up. A lane that fails or times out adds nothing that turn; the call keeps going.
+
+### Rules the code enforces (models only propose)
+
+- **Score:** fixed weights per sign (money +3, code +4, failed family check +3, refused callback +3, third-party payment +2, ...; passing the family check −5). Low 0–3, Medium 4–7, High 8+.
+- **Lock:** "High risk: confirmed" needs a supervisor-confirmed High score, a failed family check or refused callback, and a money or code request. Once locked, it stays locked.
+- **Guard on everything the agent says:** no codes or 4–8 digit numbers, no approvals or payment promises, no notes, scores or "scam" talk, no speaking as Alex or family, never ends the call.
+- **Floor:** every tap carries an action ID and a revision. Duplicates and stale taps are rejected. Take back and End always work. One question at a time.
 
 ## Run it
 
@@ -10,34 +39,78 @@ npm install
 npm run dev
 ```
 
-- Server: `http://localhost:8787` (WebSocket `/ws`, `POST /api/tts`, `GET /api/health`)
-- Web: `https://<your-LAN-IP>:5173` (self-signed cert; click through the warning once on each laptop)
+- **Brain test desk:** `http://localhost:5173/desk`. Scripted calls stand in for the phone. Each scripted line goes through every lane. You can type live lines, take over, tap a direction (the agent speaks), press Esc to cut it off, then end the call to see the Carbon review.
+- **Server:** `http://localhost:8787`
 
-Laptop 1 opens `/alex`, laptop 2 opens `/caller`. Both use headphones. Add `?call=<name>` to run separate calls.
+### Headless runs and evals
+
+```bash
+cd server
+npx tsx --env-file=../.env scripts/replay.ts maya        # one call, full event log + review
+npx tsx --env-file=../.env scripts/replay.ts all         # all 8 scenarios in parallel, eval table
+npx tsx --env-file=../.env scripts/sim-twilio.ts maya    # fake Twilio call against the running server
+```
+
+Latest `replay.ts all` run: **56/56 evals pass**.
+- Correct risk level and verdict on all 8 calls.
+- Every scam that failed a check locked as "High risk: confirmed".
+- No legitimate call was flagged.
+- Each caller line got tailored directions before the next line.
+- The agent spoke no codes and no private analysis.
+
+`sim-twilio.ts` streams the scenario as real 8 kHz µ-law phone audio into `/twilio`. It joins as Alex's app, takes over, picks a direction, takes back mid-sentence and hangs up, so it exercises the whole phone path without a Twilio account.
+
+## Phone (Twilio)
+
+1. Expose the server, e.g. `ngrok http 8787`, and set `PUBLIC_HOST` to the ngrok host.
+2. Point the Twilio number's voice webhook to `POST https://<PUBLIC_HOST>/twilio/voice`. It returns TwiML that `<Connect><Stream>`s the call to `wss://<PUBLIC_HOST>/twilio`.
+3. What the server does on that stream:
+   - **Inbound track:** transcribed as the caller.
+   - **Outbound track, if streamed:** transcribed as Alex.
+   - **Agent lines:** sent back into the call as µ-law audio, followed by a `mark`.
+   - **Take back:** sends `clear`, which stops playback at once.
+4. Alex's app joins the live call over WebSocket.
+
+## API for the phone app
+
+Connect to `ws(s)://<host>/ws` and send `{ "type": "join", "role": "app", "callId": "<CallSid>" | "latest" }`. Every event since the call started is replayed, then events stream live. The message types are in `shared/brain.ts`.
+
+**Server → app**
+- `turn.final`, `caption.interim`
+- `risk.signal`, `risk.level`
+- `notes.update`, `decision.open`
+- `directions`, `directions.withdrawn`
+- `agent.say`, `agent.cut`
+- `state`, `lane.result`
+- `call.ended`, `call.review`
+
+**App → server.** Every tap carries `actionId` and `revision`.
+- `control.delegate`, `control.takeback`
+- `direction.pick`, `call.end`
+- `desk.say` with speaker `alex`, to type a line
+
+**HTTP**
+- `GET /api/health`
+- `POST /api/tts` with `{text, voice}`, returns WAV
+- `POST /twilio/voice` (TwiML)
+- `GET /api/calls/<id>/review`
 
 ## Layout
 
 ```
-shared/protocol.ts   wire protocol + which events may reach the caller
-server/src/room.ts   call state: floor, revision, one-shot action IDs, private/public filter
-server/src/tts.ts    Gemini 3.1 Flash TTS → WAV, cached by text
-web/src/lib/mixer.ts Alex's Web Audio graph (mic gain + assistant gain → outgoing track)
-web/src/lib/rtc.ts   audio-only WebRTC (Alex offers, caller answers)
-web/src/pages/       AlexPage (call desk), CallerPage (caller's side)
+shared/brain.ts               event contract (desk, phone app, server)
+server/src/call.ts            LiveCall: brain + floor, revision, one-shot taps, agent voice, review on hang-up
+server/src/brain/orchestrator.ts  fan-out, merge, stale/answered handling, risk scoring
+server/src/brain/lanes.ts     risk, notes, planner/flash, supervisor prompts + output validation
+server/src/brain/review.ts    Carbon summary/verdict/follow-ups + code evals
+server/src/brain/catalog.ts   sign weights, lock rule, stock directions, guard
+server/src/brain/rules.ts     regex fast lane
+server/src/transcribe.ts      Gemini 3.5 Transcribe (Live) per track
+server/src/twilio.ts          Twilio Media Streams bridge + TwiML
+server/src/audio.ts           WAV, resampling, µ-law
+server/src/scenarios.ts       8 scripted calls (4 scam, 4 legitimate/everyday)
+server/src/desk.ts            desk/app socket sessions
+web/src/pages/DeskPage.tsx    test desk UI
 ```
 
-## Rules the code enforces
-
-- The assistant is mixed into **Alex's** outgoing line. Takeback is a local gain change, done before the server is told.
-- Every control carries an action ID and revision. The server consumes each once and rejects duplicates and stale ones. Takeback and end are never refused.
-- Any clip requested under an old revision is discarded, never played.
-- `CallRoom.send` drops every non-public event addressed to the caller. The caller page counts private events received (must be 0).
-
-## Kickoff voice checks
-
-| Check | Pass |
-|---|---|
-| Two laptops, two-way audio | Both hear each other, no echo on headphones |
-| Clip into Alex's line | Caller hears it, Alex hears it |
-| Takeback mid-clip ×5 | "Takeback → caller silent" under 250 ms each time |
-| Pre-render | Clip ready before Alex usually taps |
+The earlier two-laptop WebRTC prototype is still in place: `/alex`, `/caller`, `server/src/room.ts`, `web/src/lib/{rtc,mixer}.ts`.
