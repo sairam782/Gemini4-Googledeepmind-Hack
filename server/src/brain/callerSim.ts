@@ -102,9 +102,15 @@ export class SimCaller {
     this.reply = null;
     const atLimit = this.lines >= MAX_CALLER_LINES - 1;
     const h = atLimit ? "This is your last line: wrap up and hang up." : hint;
-    void nextCallerLine(this.sc, this.call.brain.snapshot().turns, h).then((line) => {
+    const draft = () => nextCallerLine(this.sc, this.call.brain.snapshot().turns, h);
+    // One retry on a failed draft; after that stay quiet (the idle nudge speaks up later) rather than say filler.
+    void draft().then((l) => l ?? draft()).then((line) => {
       if (my !== this.gen || this.stopped) return; // someone spoke again meanwhile; a newer draft is coming
-      this.reply = line ?? { text: "Sorry, what was that?", hangUp: false };
+      if (!line) {
+        this.idle = setTimeout(() => this.respond(null, "Nobody has answered you for a while; react to the silence."), IDLE_NUDGE_MS);
+        return;
+      }
+      this.reply = line;
       if (atLimit) this.reply.hangUp = true;
       this.flush();
     });

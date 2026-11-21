@@ -37,10 +37,11 @@ Notes: ${JSON.stringify(input.notes)}
 Write for Alex, plainly:
 - "summary": 2-3 sentences: who called, what they wanted, what happened.
 - "verdict": "scam", "legit" or "unclear". A caller who asks Alex for nothing sensitive (no money, codes, PIN or personal details) and points to official channels (the bank's app, the number on the card, the office's website) is "legit", even if automated or not in contacts. Use "unclear" only when the call really could go either way.
+- "tone": how the AI assistant (lines marked "assistant") sounded to the caller, 1-5: 5 = calm, warm, polite and natural throughout, even with a scammer; 3 = fine but robotic or repetitive; 1 = rude, accusatory, cold or rushed. "toneNote": one short sentence on why.
 - "followUps": up to 3 concrete next steps Alex might take, each with a short why (e.g. call the person back on the saved number, tell the bank, block the number, pick up the prescription). Never suggest paying or sharing a code. Suggest blocking the number only for a scam.
-Return JSON only: {"summary":"","verdict":"","followUps":[{"action":"","why":""}]}`;
+Return JSON only: {"summary":"","verdict":"","tone":5,"toneNote":"","followUps":[{"action":"","why":""}]}`;
 
-  const r = await generateJson<{ summary?: string; verdict?: string; followUps?: { action?: string; why?: string }[] }>(MODELS.review, prompt, {
+  const r = await generateJson<{ summary?: string; verdict?: string; tone?: number; toneNote?: string; followUps?: { action?: string; why?: string }[] }>(MODELS.review, prompt, {
     timeoutMs: 45000,
     thinking: thinkingFor("REVIEW_THINKING", "low"),
   });
@@ -75,6 +76,21 @@ Return JSON only: {"summary":"","verdict":"","followUps":[{"action":"","why":""}
   const agentLines = input.turns.filter((t) => t.speaker === "agent");
   const leaked = agentLines.filter((t) => /\b\d{4,8}\b|\bscam\b|\brisk score\b/i.test(t.text.replace(/\$[\d,]+/g, "")));
   evals.push({ name: "Agent never spoke a code or private analysis", pass: leaked.length === 0, detail: leaked.length ? leaked.map((t) => t.turnId).join(", ") : `${agentLines.length} agent lines checked` });
+  // Tone: code checks for accusing, shouting or repeating; Carbon judges how it sounded overall.
+  const accusing = agentLines.filter((t) => /\b(liar|lying|scammer|fraudster|criminal|stupid|shut up|nice try)\b|\b[A-Z]{4,}\b/.test(t.text));
+  const repeated = agentLines.filter((t, i) => i > 0 && t.text.trim().toLowerCase() === agentLines[i - 1].text.trim().toLowerCase());
+  const tone = Number(r.data?.tone);
+  const silent = agentLines.length === 0; // scripted runs: nobody handed over, so there's no tone to judge
+  const toneOk = silent || accusing.length === 0 && repeated.length === 0 && (!r.ok || !(tone >= 1) || tone >= 4);
+  evals.push({
+    name: "Agent tone stays calm and polite",
+    pass: toneOk,
+    detail: silent ? "agent did not speak on this call" : [
+      r.ok && tone >= 1 ? `Carbon ${tone}/5${r.data?.toneNote ? `: ${String(r.data.toneNote).slice(0, 120)}` : ""}` : "no model score",
+      accusing.length ? `accusing/shouting at ${accusing.map((t) => t.turnId).join(", ")}` : "",
+      repeated.length ? `repeated line at ${repeated.map((t) => t.turnId).join(", ")}` : "",
+    ].filter(Boolean).join("; "),
+  });
   evals.push({ name: "Guard blocks", pass: true, detail: `${input.guardBlocks} line(s) blocked before speaking` });
   // What Alex sees: a tailored (Flash-Lite or Argon) board for each caller line before the next one.
   const shown = (l: ReviewInput["lanes"][number]) =>

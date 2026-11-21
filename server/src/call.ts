@@ -25,7 +25,11 @@ export interface AgentVoice {
  * wait up to AUTO_WAIT_MS more for one before falling back to a stock card. AUTO_SPEAK_MS=0 turns it off.
  */
 const AUTO_SPEAK_MS = Number(process.env.AUTO_SPEAK_MS ?? 4000);
-const AUTO_WAIT_MS = 2000;
+/** Backchannels the desk plays ~1 s after the caller stops, while the real reply renders. Pre-rendered there. */
+export const ACKS = ["Mm-hm.", "Okay.", "I see.", "Right."];
+const ACK_ON = process.env.AGENT_ACKS !== "0";
+const CALLER_QUIET_MS = 1000; // the caller must be quiet this long before the agent speaks on its own
+const AUTO_WAIT_MS = 4000; // a generic stock line mid-call sounds off, so wait a bit longer for a tailored one
 
 export const calls = new Map<string, LiveCall>();
 let latest: string | null = null;
@@ -51,6 +55,9 @@ export class LiveCall {
   /** Desk live mode: caller text arrives before its audio is played, so the auto clock starts at callerAudioDone. */
   waitForCallerAudio = false;
   private lastAgentEnd = 0;
+  /** Mic mode: true while a caller sentence is held waiting for its next piece; the agent waits for it. */
+  callerPending: () => boolean = () => false;
+  private lastCallerSound = 0; // last time the caller made sound (mic level or a caption)
   private introduced = false;
   private consumed = new Set<string>();
   private listeners = new Set<Listener>();
@@ -107,11 +114,33 @@ export class LiveCall {
   caller(text: string) {
     if (this.ended || !text.trim()) return;
     this.brain.addTurn("caller", text.trim().slice(0, 500));
-    if (!this.waitForCallerAudio) this.scheduleAuto();
+    if (!this.waitForCallerAudio) {
+      this.scheduleAuto();
+      this.ack();
+    }
   }
 
   callerAudioDone(turnId: string) {
-    if (this.waitForCallerAudio && turnId === this.brain.lastCallerTurnId()) this.scheduleAuto();
+    if (this.waitForCallerAudio && turnId === this.brain.lastCallerTurnId()) {
+      this.scheduleAuto();
+      this.ack();
+    }
+  }
+
+  private lastAck = "";
+  private ackTurns = 0;
+  /** "Mm-hm." once the caller is quiet, so the line never goes dead while the reply loads. Most turns, not all. */
+  private ack(tries = 0) {
+    if (!ACK_ON || !this.autoSpeakMs || this.ended || this.floor !== "agent" || !this.introduced || this.introPending || this.speaking) return;
+    if (tries === 0 && ++this.ackTurns % 4 === 0) return; // skip every 4th so it doesn't sound mechanical
+    // Only into real silence: never during a hesitation or while a sentence is still being joined.
+    if (this.callerPending() || Date.now() - this.lastCallerSound < 800) {
+      if (tries < 10) setTimeout(() => this.ack(tries + 1), 150);
+      return;
+    }
+    const text = ACKS.filter((a) => a !== this.lastAck)[Math.floor(Math.random() * (ACKS.length - 1))];
+    this.lastAck = text;
+    this.emit({ type: "agent.ack", text });
   }
 
   /** Alex speaking. From the desk it's refused while the agent has the floor; on a phone, Alex's voice wins. */
@@ -126,6 +155,7 @@ export class LiveCall {
 
   interim(speaker: Speaker, text: string) {
     this.emit({ type: "caption.interim", speaker, text });
+    if (speaker === "caller") this.callerSound();
     // Barge-in: the caller talks over the agent. Stop the agent so it doesn't talk across them;
     // the floor stays with the agent and Alex picks the next line as usual.
     // Only audio that is actually playing can be talked over; a line still rendering is left alone.
@@ -136,6 +166,7 @@ export class LiveCall {
       this.speaking = null;
       this.playing = null;
       this.lastAgentEnd = Date.now();
+      this.cancelAuto(); // they're still talking; answer after their line, not over it
       this.emit({ type: "agent.cut", turnId: t });
     }
   }
@@ -180,7 +211,7 @@ export class LiveCall {
       this.accept(m.actionId);
       if (!this.introduced) {
         this.introduced = true;
-        this.agentSay(INTRO, null);
+        this.sayIntro();
       }
       this.brain.reissue();
       if (this.brain.lastCallerTurnId()) this.scheduleAuto();
@@ -189,7 +220,7 @@ export class LiveCall {
       this.accept(m.actionId);
     } else if (m.type === "direction.pick") {
       if (this.floor !== "agent") return reject("not delegated: tap Agent take over first");
-      if (this.speaking) return reject("busy: the agent is still speaking");
+      if (this.speaking || this.introPending) return reject("busy: the agent is still speaking");
       const d = this.brain.findDirection(m.directionId);
       if (!d) return reject("stale");
       this.cancelAuto();
@@ -205,8 +236,26 @@ export class LiveCall {
     this.state();
   }
 
+  /** The caller is making sound right now (mic level or a live caption). */
+  callerSound() {
+    this.lastCallerSound = Date.now();
+  }
+
+  private introPending = false;
+  /** The take-over intro also waits for the caller to finish their sentence. */
+  private sayIntro(tries = 0) {
+    if (this.ended || this.floor !== "agent") return void (this.introPending = false);
+    if (tries < 30 && (this.callerPending() || Date.now() - this.lastCallerSound < CALLER_QUIET_MS)) {
+      this.introPending = true; // up to ~6 s, then speak anyway
+      return void setTimeout(() => this.sayIntro(tries + 1), 200);
+    }
+    this.introPending = false;
+    this.agentSay(INTRO, null);
+  }
+
   private takeBack(cutTurnId?: string) {
     this.cancelAuto();
+    if (this.speaking) this.lastAgentEnd = Date.now(); // keep the echo filter on for the cut-off words
     if (this.speaking && (!cutTurnId || cutTurnId === this.speaking)) {
       this.voice?.cut(this.speaking);
       this.brain.cutTurn(this.speaking);
@@ -244,6 +293,10 @@ export class LiveCall {
     if (this.ended || this.floor !== "agent" || this.brain.lastCallerTurnId() !== forTurn) return;
     const retry = () => (this.autoTimer = setTimeout(() => this.fireAuto(forTurn, hardStop), 250));
     // Let the agent finish its current line, and give Flash-Lite a moment if only stock cards are up.
+    // Never start over the caller: if they're still talking (a pause mid-sentence), wait until they stop.
+    // (A noisy room can look like talking forever, so the level stops counting a couple of seconds past hardStop.)
+    const talking = Date.now() - this.lastCallerSound < CALLER_QUIET_MS && Date.now() < hardStop + 2000;
+    if (this.introPending || this.callerPending() || talking) return retry();
     if (this.speaking || (!this.brain.hasTailoredBoard() && Date.now() < hardStop)) return retry();
     const d = this.brain.bestDirection();
     if (!d) return Date.now() < hardStop + 3000 ? retry() : undefined;

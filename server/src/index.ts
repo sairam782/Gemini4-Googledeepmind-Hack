@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMsg, Role } from "../../shared/protocol.ts";
 import { CallRoom } from "./room.ts";
-import { renderSpeech, ttsEnabled } from "./tts.ts";
+import { renderSpeech, STREAM_RATE, streamSpeech, ttsEnabled } from "./tts.ts";
 import { DeskSession } from "./desk.ts";
 import { calls, findCall } from "./call.ts";
 import { handleTwilioStream, twiml } from "./twilio.ts";
@@ -61,6 +61,24 @@ const http = createServer(async (req, res) => {
       res.writeHead(200, { "content-type": "audio/wav", "x-render-ms": String(Date.now() - t0) });
       return res.end(wav);
     }
+    if (req.method === "POST" && req.url === "/api/tts/stream") {
+      const { text, voice } = JSON.parse(await body(req)) as { text?: string; voice?: string };
+      if (!text || text.length > 600) return json(res, 400, { error: "text required (max 600 chars)" });
+      if (!ttsEnabled()) return json(res, 503, { error: "TTS disabled: set GEMINI_API_KEY in .env" });
+      let started = false;
+      try {
+        await streamSpeech(text, voice, (pcm) => {
+          if (!started) {
+            started = true;
+            res.writeHead(200, { "content-type": `audio/l16; rate=${STREAM_RATE}`, "x-sample-rate": String(STREAM_RATE), "cache-control": "no-store" });
+          }
+          if (!res.destroyed) res.write(pcm);
+        });
+      } catch (e) {
+        if (!started) return json(res, 502, { error: (e as Error).message });
+      }
+      return res.end();
+    }
     json(res, 404, { error: "not found" });
   } catch (err) {
     console.error(err);
@@ -82,8 +100,19 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   let room: CallRoom | null = null;
   let role: Role | null = null;
   let desk: DeskSession | null = null;
+  let deskRole: "desk" | "app" | null = null;
 
-  ws.on("message", (raw) => {
+  ws.on("message", (raw, isBinary) => {
+    // Desk mic mode: raw 16 kHz 16-bit PCM from the browser.
+    if (isBinary) {
+      try {
+        const buf = Buffer.isBuffer(raw) ? raw : Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw);
+        if (desk && deskRole === "desk") desk.audio(buf); // only the operator desk streams a mic, not the app
+      } catch (e) {
+        console.error("mic audio:", (e as Error).message);
+      }
+      return;
+    }
     let msg: ClientMsg | DeskClientMsg;
     try {
       msg = JSON.parse(String(raw));
@@ -100,6 +129,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     }
     if (msg.type === "join" && (msg.role === "desk" || msg.role === "app")) {
       desk = new DeskSession(ws, msg.role, msg.callId);
+      deskRole = msg.role;
       console.log(`${msg.role} joined${msg.role === "app" ? ` ${msg.callId}` : ""}`);
       return;
     }

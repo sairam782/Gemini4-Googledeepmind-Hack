@@ -123,7 +123,7 @@ export async function generateJson<T>(
         });
         const text = res.text ?? "";
         try {
-          return { ok: true, data: JSON.parse(text) as T, ms: Date.now() - t0, retries };
+          return { ok: true, data: parseLoose(text) as T, ms: Date.now() - t0, retries };
         } catch {
           return { ok: false, ms: Date.now() - t0, error: `bad JSON: ${text.slice(0, 80)}`, retries };
         }
@@ -146,5 +146,17 @@ export async function generateJson<T>(
     }
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** JSON.parse, falling back to the outermost {...} or [...] when the model wraps it in extra text. */
+export function parseLoose(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    const start = text.search(/[[{]/);
+    const end = Math.max(text.lastIndexOf("}"), text.lastIndexOf("]"));
+    if (start < 0 || end <= start) throw e;
+    return JSON.parse(text.slice(start, end + 1));
   }
 }

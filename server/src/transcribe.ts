@@ -1,4 +1,4 @@
-import { GoogleGenAI, Modality, type Session } from "@google/genai";
+import { GoogleGenAI, Modality, type Session, EndSensitivity } from "@google/genai";
 
 const MODEL = process.env.TRANSCRIBE_MODEL || "gemini-3.5-transcribe-live";
 const ai = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
@@ -38,7 +38,17 @@ export class Transcriber {
     this.connecting = ai.live
       .connect({
         model: MODEL,
-        config: { responseModalities: [Modality.TEXT], inputAudioTranscription: {} },
+        config: {
+          responseModalities: [Modality.TEXT],
+          inputAudioTranscription: {},
+          // Commit the caller's line after a short pause instead of the default, so the agent answers sooner.
+          realtimeInputConfig: {
+            automaticActivityDetection: {
+              endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_HIGH,
+              silenceDurationMs: Number(process.env.STT_SILENCE_MS ?? 500),
+            },
+          },
+        },
         callbacks: {
           onmessage: (m) => {
             const sc = m.serverContent as
@@ -57,6 +67,7 @@ export class Transcriber {
         },
       })
       .then((s) => {
+        if (this.closed) return s.close(); // the call ended while connecting
         this.failures = 0;
         this.session = s;
         for (const chunk of this.queue.splice(0)) this.sendNow(chunk);
@@ -90,6 +101,7 @@ export class Transcriber {
 
   close() {
     this.closed = true;
+    this.queue = [];
     this.session?.close();
     this.session = null;
   }

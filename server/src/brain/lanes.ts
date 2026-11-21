@@ -13,6 +13,15 @@ const NOT_SIGNS =
 const catalogText = SIGN_IDS.map((id) => `- ${id}: ${SIGNS[id].label}`).join("\n");
 const transcriptText = (turns: Turn[]) =>
   turns.map((t) => `${t.turnId} ${t.speaker === "agent" ? "assistant" : t.speaker}: ${t.text}${t.status === "cut" ? " [cut off]" : ""}`).join("\n");
+const words = (t: string) => new Set(t.toLowerCase().replace(/[^a-z0-9$' ]/g, " ").split(/\s+/).filter((w) => w.length > 2));
+const sentences = (t: string) => t.match(/[^.!?]+[.!?]*/g)?.map((x) => x.trim()).filter(Boolean) ?? [t];
+/** Share of the smaller line's words that also appear in the other line. */
+const overlap = (a: Set<string>, b: Set<string>) => {
+  if (!a.size || !b.size) return 0;
+  let n = 0;
+  for (const w of a) if (b.has(w)) n++;
+  return n / Math.min(a.size, b.size);
+};
 const arr = <T>(x: unknown): T[] => (Array.isArray(x) ? (x as T[]) : []);
 const callLine = (ctx: CallContext) => `Call: from ${ctx.from} (${ctx.inContacts ? "in Alex's contacts" : "NOT in Alex's contacts"}).`;
 
@@ -78,6 +87,7 @@ THE ASSISTANT'S VOICE
 - An AI assistant speaking FOR Alex: "Alex", "Alex's", "I'll let Alex know". Never speaks as Alex or family (no "our", "we used to", "my mom").
 - Warm, calm, brief, like a capable receptionist. Contractions. 6 to 22 words. One question or one statement per line.
 - Never start with a greeting ("Hi", "Hello") or re-introduce the assistant; it already introduced itself.
+- Vary the wording: don't start every line with "Alex will" or "Alex won't", and don't reuse the previous line's sentence.
 - Keep pronouns consistent ("call Maya on the number Alex has saved for her"), and don't say "Alex" twice in one sentence when "the card" or "her" works.
 - You don't know Alex's private facts, so never say an answer "didn't match" or was "wrong"; react to the hesitation or dodge instead ("since you weren't sure").
 - Refuse only what was actually asked: mention codes only if a code was asked for, money only if money was asked for. Name it specifically ("the $900 to Jordan").
@@ -86,7 +96,7 @@ THE ASSISTANT'S VOICE
 - Start by reacting to the caller's newest line (acknowledge, answer a fair question, or name the dodge politely), then make the move.
 - Use the call's specifics: names, amounts, dates, places ("the $900 for the tow", "Friday pickup").
 - Never ask the caller for, or about, account numbers, card digits, PINs, passwords, codes, addresses or other personal details, even "just the last four". The assistant gives nothing and collects nothing sensitive.
-- Callbacks are always on a number Alex already has: "the number Alex has saved for Maya", "the number on the back of Alex's card", "the shop's number". Never "your usual number" or a number the caller offers.
+- Callbacks are always on a number Alex already has: "the number Alex has saved for Maya", "the number on the back of the card", "the shop's number". Never "your usual number" or a number the caller offers.
 - Never: approve, agree, pay, promise money, read or ask to hear codes being shared, say it will hang up or end the call, or use the words "scam", "note", "private", "approve", "deal", "warning".
 
 WHAT TO DO (read the whole call, then the caller's newest line ${newest ? `${newest.turnId}: "${newest.text}"` : ""})
@@ -95,7 +105,7 @@ WHAT TO DO (read the whole call, then the caller's newest line ${newest ? `${new
 - Real bank alerts ask for nothing and point to the app or the card's number: thank them, confirm the detail, take_message.
 - Unknown caller claiming to be family or a bank, asking for money, codes or secrecy, or threatening a freeze: climb this ladder, one rung per line, never repeating a rung the caller already got:
   1. verify_identity: ask something only the real person would know, about Alex in the third person ("Alex asked me to check: what's the name of Alex's dog?"). For a bank, agency or company there is no quiz: skip to rung 2.
-  2. offer_callback: Alex will call back on the number Alex already has (for a bank: the number on Alex's card).
+  2. offer_callback: Alex will call back on the number Alex already has (for a bank: the number on the back of the card).
   3. decline: calm, firm no to exactly what they asked for, with the safe path ("Alex won't send the $900 to Jordan on this call. Alex will reach Maya on the number Alex has saved.").
   Dodged, wrong or angry answer to a rung = move UP a rung and say so kindly ("I hear you're in a hurry, but..."). A code request at any point = decline now.
 - slow_down when the caller pushes a deadline; probe_details when the request is still unclear.
@@ -120,6 +130,7 @@ ${transcriptText(input.turns)}
 Warning signs so far: ${input.signs.join(", ") || "none"}
 Facts from the caller: ${JSON.stringify(input.notes)}
 On Alex's screen now: ${JSON.stringify(input.onScreen)}
+The assistant's last lines (don't reuse their opening words like "Got it" / "I hear" or their closing like "I'll pass that to Alex"; a reply can simply answer, e.g. "Friday works, thanks for the heads-up."): ${JSON.stringify(input.turns.filter((t) => t.speaker === "agent").slice(-3).map((t) => t.text))}
 Lines the assistant already used (categories): ${JSON.stringify(input.asked)}. Answered by the caller: ${JSON.stringify(input.answered)}.
 ${input.strategy ? `Strategy from the senior planner (written after ${input.strategy.turnId}; follow it if it still fits the newest line): ${input.strategy.text}
 ` : ""}Categories: ${CATEGORIES.join(", ")}.
@@ -154,6 +165,33 @@ Return JSON only:
       suggested: !!x.suggested,
       confidence: Math.max(0, Math.min(1, Number(x.confidence) || 0.5)),
     }));
+  // Near-repeats of what the agent already said sound robotic (the tone eval flags them): drop them,
+  // unless that would leave nothing to say.
+  // Checked per sentence too: "Alex won't be rushed. Alex will call the number on the card." becomes
+  // "Alex won't be rushed." when the card line was already said.
+  const agentText = input.turns.filter((t) => t.speaker === "agent").map((t) => t.text);
+  const said = agentText.map(words);
+  const saidSentences = agentText.flatMap(sentences).map(words).filter((w) => w.size >= 4);
+  const fresh = directions
+    .map((x) => {
+      const kept = sentences(x.say).filter((sn) => {
+        const w = words(sn);
+        return w.size < 4 || !saidSentences.some((p) => overlap(w, p) >= 0.75);
+      });
+      return kept.length && kept.length < sentences(x.say).length ? { ...x, say: kept.join(" ") } : x;
+    })
+    .filter((x) => {
+      const repeat = said.some((w) => overlap(words(x.say), w) >= 0.7);
+      if (repeat) dropped.push(`"${x.label}": repeats an earlier line`);
+      return !repeat;
+    });
+  if (fresh.length) directions = fresh;
+  else if (directions.length) {
+    // Everything repeats (a scammer asking the same thing again): repeat once, briefly, like a person would.
+    const first = directions.find((x) => x.suggested) ?? directions[0];
+    const sentence = first.say.match(/^[^.!?]+[.!?]/)?.[0] ?? first.say;
+    directions = [{ ...first, say: `Like I said, ${sentence.charAt(0).toLowerCase()}${sentence.slice(1)}`, suggested: true }];
+  }
   if (!directions.length && !dropped.length) dropped.push(`empty: ${JSON.stringify(r.data).slice(0, 160)}`);
   if (directions.length && directions.filter((x) => x.suggested).length !== 1) {
     directions = directions.map((x, i) => ({ ...x, suggested: i === 0 }));
