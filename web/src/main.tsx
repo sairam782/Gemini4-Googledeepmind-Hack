@@ -11,13 +11,11 @@ const params = new URLSearchParams(location.search);
 const callId = params.get("call") || "demo";
 const path = location.pathname.replace(/\/+$/, "");
 
-/** The brand mark from the phone app (web/public/brand-icon.svg). */
 export function Mark({ size = 30 }: { size?: number }) {
-  return <img className="logo" src="/brand-icon.svg" width={size} height={size} alt="" />;
+  return <img className="logo" src="/brand-icon.png" width={size} height={size} alt="" />;
 }
 
-/** The wordmark: coral "Uno", ink "Re", green "Voice". */
-export const Word = () => <span className="word" aria-label="Uno ReVoice"><span className="uno">Uno </span>Re<span className="voice">Voice</span></span>;
+export const Word = () => <img className="word" src="/brand-wordmark.png" width={148} height={35} alt="Uno ReVoice" />;
 
 function Home() {
   const q = `?call=${encodeURIComponent(callId)}`;

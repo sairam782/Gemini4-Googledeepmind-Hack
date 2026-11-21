@@ -1,10 +1,8 @@
 /* Uno ReVoice · a calm control room for one live call.
-   The phone app's brand: cream, ink, coral and green; the agent speaks in deep green; risk speaks in SCAM/UNSURE/REAL colours.
+   The phone app logo uses navy and red on cream. Deep green distinguishes the agent's voice.
    Display: Bricolage Grotesque (state, risk, headings). Text: IBM Plex Sans. */
 :root {
-  /* Uno ReVoice brand, matched to the phone app (phone_app: src/constants/theme.ts):
-     coral "Uno", ink "Re", green "Voice", on cream. Danger/success/caution are the deeper,
-     white-text-safe versions the app uses for SCAM / REAL / UNSURE. */
+  /* The web interface uses cream, coral and green alongside the phone app logo. */
   --coral: #ff5a4e; --green: #19a37f; --cream: #fff4e8;
   --ink: #1f1f1f;
   --ink-2: #3a3531;
@@ -56,8 +54,7 @@ p { margin: 0; }
 .appbar-in { max-width: 1320px; margin: 0 auto; padding: 0 24px; height: 60px; display: flex; align-items: center; gap: 28px; }
 .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 800; font-size: 20px; letter-spacing: -0.02em; }
 .logo { border-radius: 9px; display: block; }
-.word .uno { color: var(--coral); } .word .voice { color: var(--green); }
-.brand svg { display: block; }
+.word { display: block; object-fit: contain; }
 .nav { display: flex; gap: 4px; }
 .nav a { padding: 7px 12px; border-radius: 99px; color: var(--muted); font-weight: 500; font-size: 14px; }
 .nav a:hover { color: var(--ink); background: var(--paper-2); }
