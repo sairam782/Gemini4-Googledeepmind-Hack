@@ -7,7 +7,8 @@ import { webSocketUrl } from '@/lib/server';
 import { connectSimulation } from '@/lib/simulation';
 import { createStore, settingsStore, useStore } from '@/lib/store';
 
-export type ConnectionStatus = 'not-set-up' | 'connecting' | 'online' | 'offline';
+/** 'demo': Demo mode, no server on purpose. */
+export type ConnectionStatus = 'demo' | 'not-set-up' | 'connecting' | 'online' | 'offline';
 
 export const connectionStore = createStore<ConnectionStatus>('not-set-up');
 
@@ -80,13 +81,17 @@ function connectSim(url: string, token: string): () => void {
 }
 
 /**
- * Mount once at the root. Connects to the server picked in Setup (phone or web simulation)
- * and reconnects whenever the switch, an address or the phone number changes.
+ * Mount once at the root. Connects to the server for the mode picked in Setup (none in Demo)
+ * and reconnects whenever the mode, an address or the phone number changes.
  */
 export function useServerConnection() {
-  const { backend, serverUrl, simServerUrl, simToken, myPhone } = useStore(settingsStore);
+  const { mode, serverUrl, simServerUrl, simToken, myPhone } = useStore(settingsStore);
   useEffect(() => {
-    if (backend === 'web') {
+    if (mode === 'demo') {
+      connectionStore.set('demo');
+      return;
+    }
+    if (mode === 'simulation') {
       if (!simServerUrl.trim()) {
         connectionStore.set('not-set-up');
         return;
@@ -98,5 +103,5 @@ export function useServerConnection() {
       return;
     }
     return connect(webSocketUrl(serverUrl, myPhone));
-  }, [backend, serverUrl, simServerUrl, simToken, myPhone]);
+  }, [mode, serverUrl, simServerUrl, simToken, myPhone]);
 }

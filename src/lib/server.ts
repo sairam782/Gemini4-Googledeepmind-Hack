@@ -1,6 +1,6 @@
 /**
- * Everything the app sends to Abhi's server lives in this file, so the paths are easy to change
- * once the server's routes are settled. The WebSocket message format is in protocol.ts.
+ * Everything the app sends to the phone server (twilio-server/, Live mode) lives in this file.
+ * The WebSocket message format is in protocol.ts.
  *
  * Twilio credentials (Account SID / Auth Token) stay on the server. They never belong in the app.
  */
@@ -61,6 +61,11 @@ export function joinCall(callId: string, myPhone: string) {
 /** The server hangs up on the caller. */
 export function endCall(callId: string) {
   return post(`/api/calls/${encodeURIComponent(callId)}/end`, {});
+}
+
+/** Steering: a private instruction for the agent's next line. */
+export function steerCall(callId: string, text: string) {
+  return post(`/api/calls/${encodeURIComponent(callId)}/say`, { text });
 }
 
 /** Adds the number to the server's block list. */

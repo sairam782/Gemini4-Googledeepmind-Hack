@@ -1,0 +1,21 @@
+{
+  "name": "uno-revoice-phone-server",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Uno ReVoice: answers forwarded calls on the SignalWire number with a Gemini Live agent and streams the call to the phone app.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --watch --env-file-if-exists=.env src/index.js",
+    "sim": "node --env-file-if-exists=.env scripts/sim.js"
+  },
+  "engines": {
+    "node": ">=20.6"
+  },
+  "dependencies": {
+    "@google/genai": "1.52.0",
+    "@signalwire/compatibility-api": "^3.2.1",
+    "ws": "^8.23.0"
+  }
+}

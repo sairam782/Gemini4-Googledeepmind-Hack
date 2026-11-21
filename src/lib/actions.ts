@@ -1,6 +1,6 @@
 import { callStore, updateCall } from '@/lib/call';
 import { endDemoCall } from '@/lib/demo';
-import { blockNumber, endCall, joinCall } from '@/lib/server';
+import { blockNumber, endCall, joinCall, steerCall } from '@/lib/server';
 import { isSimCall, simEnd, simTakeBack } from '@/lib/simulation';
 import { addBlocked, markHistoryBlocked, settingsStore } from '@/lib/store';
 
@@ -63,4 +63,16 @@ export async function block() {
   }
   await blockNumber(settingsStore.get().myPhone, call.from, call.callId);
   if (!call.ended) await endCall(call.callId);
+}
+
+/** Can the user steer this call's agent? Live calls only: the team server has no free-text steering. */
+export function canSteer(call: { demo: boolean; callId: string; ended: boolean; joined: boolean }) {
+  return !call.demo && !call.ended && !call.joined && !isSimCall(call.callId);
+}
+
+/** Steer: a private instruction the agent follows in its next line. */
+export async function steer(text: string) {
+  const call = callStore.get();
+  if (!call || !canSteer(call)) return;
+  await steerCall(call.callId, text);
 }

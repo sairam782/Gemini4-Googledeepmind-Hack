@@ -38,6 +38,8 @@ yarn-error.*
 
 # agent server call history and blocklist
 server/data/
+twilio-server/data/
+twilio-server/sim-agent.wav
 
 # typescript
 *.tsbuildinfo

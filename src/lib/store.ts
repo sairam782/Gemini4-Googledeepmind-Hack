@@ -41,11 +41,14 @@ export function useStore<T>(store: Store<T>): T {
 export type Carrier = 'verizon' | 'att_tmobile';
 
 /**
- * Which server the app listens to:
- *  - 'phone': the phone server (twilio-server/), real forwarded calls, the app's own /app protocol.
- *  - 'web':   Abhi's agent server (server/), calls started from the web test desk, its /ws protocol.
+ * How the app gets its calls:
+ *  - 'demo':       scripted scam/real calls (demo.ts). No server, works offline. The judging backup.
+ *  - 'simulation': the team's agent server (server/, /ws): Gemini plays the caller. No phone line.
+ *  - 'live':       real forwarded calls: SignalWire → twilio-server/ (/app) → Gemini.
  */
-export type Backend = 'phone' | 'web';
+export type AppMode = 'demo' | 'simulation' | 'live';
+
+export const isAppMode = (v: unknown): v is AppMode => v === 'demo' || v === 'simulation' || v === 'live';
 
 export type Settings = {
   /** The user's real phone. The server rings it when they tap Join. */
@@ -53,11 +56,11 @@ export type Settings = {
   /** The Twilio number calls are forwarded to. Not a secret. */
   agentNumber: string;
   carrier: Carrier;
-  /** Phone server (twilio-server/), e.g. https://uno-revoice.example.com */
+  /** Live mode: the phone server (twilio-server/), e.g. https://abcd.ngrok-free.app */
   serverUrl: string;
-  /** Which server the app listens to. See Backend. */
-  backend: Backend;
-  /** Abhi's agent server for web simulation, e.g. http://localhost:8787 */
+  /** How the app gets its calls. See AppMode. */
+  mode: AppMode;
+  /** Simulation mode: the team's agent server (server/), e.g. http://localhost:8787 */
   simServerUrl: string;
   /** APP_TOKEN of the agent server. Needed when the app isn't on the server's own computer. */
   simToken: string;
@@ -81,7 +84,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentNumber: process.env.EXPO_PUBLIC_AGENT_NUMBER ?? '',
   carrier: 'verizon',
   serverUrl: process.env.EXPO_PUBLIC_SERVER_URL ?? '',
-  backend: process.env.EXPO_PUBLIC_BACKEND === 'web' ? 'web' : 'phone',
+  mode: isAppMode(process.env.EXPO_PUBLIC_MODE) ? process.env.EXPO_PUBLIC_MODE : 'live',
   simServerUrl: process.env.EXPO_PUBLIC_SIM_SERVER_URL ?? 'http://localhost:8787',
   simToken: '',
 };
@@ -122,7 +125,13 @@ export async function loadPersisted() {
       SecureStore.getItemAsync(SETTINGS_KEY),
       SecureStore.getItemAsync(SAFE_WORDS_KEY),
     ]);
-    if (rawSettings) settingsStore.set({ ...DEFAULT_SETTINGS, ...JSON.parse(rawSettings) });
+    if (rawSettings) {
+      const saved = JSON.parse(rawSettings) as Partial<Settings> & { backend?: string };
+      // Older builds saved `backend: 'phone' | 'web'` instead of `mode`.
+      if (!isAppMode(saved.mode) && saved.backend === 'web') saved.mode = 'simulation';
+      delete saved.backend;
+      settingsStore.set({ ...DEFAULT_SETTINGS, ...saved, mode: isAppMode(saved.mode) ? saved.mode : DEFAULT_SETTINGS.mode });
+    }
     if (rawWords) safeWordsStore.set(JSON.parse(rawWords));
   } catch (e) {
     console.warn('Could not load secure settings', e);
