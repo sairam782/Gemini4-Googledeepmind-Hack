@@ -9,6 +9,7 @@ import { handleTwilioStream, twiml } from "./twilio.ts";
 import { appAllowed, appTokenSet, bearer } from "./auth.ts";
 import { streamSig, verifyTwilioRequest } from "./twilioAuth.ts";
 import { listCalls, loadCall } from "./store.ts";
+import { isBlocked } from "./blocklist.ts";
 import type { DeskClientMsg } from "../../shared/brain.ts";
 
 const PORT = Number(process.env.API_PORT || 8787);
@@ -34,6 +35,8 @@ const http = createServer(async (req, res) => {
         sig = streamSig(authToken, form.get("CallSid") || "");
       }
       res.writeHead(200, { "content-type": "text/xml" });
+      // Numbers Alex blocked through a follow-up are rejected before anything is streamed.
+      if (isBlocked(form.get("From") || "")) return res.end('<?xml version="1.0" encoding="UTF-8"?><Response><Reject/></Response>');
       return res.end(twiml(host, form.get("From") || "unknown", sig));
     }
     if (req.url?.startsWith("/api/calls") && !appAllowed(req, bearer(req))) return json(res, 401, { error: "app token required" });
