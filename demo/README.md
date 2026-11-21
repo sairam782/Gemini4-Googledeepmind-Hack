@@ -1,10 +1,10 @@
 # Demo video
 
-**[uno-revoice-demo.mp4](uno-revoice-demo.mp4)**: 58 s, 1920×1080. The phone app in Demo mode, with an ElevenLabs voiceover (voice "Sarah") and subtle sound effects.
+**[uno-revoice-demo.mp4](uno-revoice-demo.mp4)**: 55 s, 1920×1080. The phone app in Demo mode, with an ElevenLabs voiceover (voice "Sarah"), subtle sound effects, a "how it works" diagram, and labels showing which Gemini model is working at each moment.
 
-It covers: home screen → a scam call screened live (transcript, warning signs) → **SCAM** verdict → Block → a real caller → **REAL** verdict → call history with reasons and blocked numbers → Setup with the Demo / Simulation / Live modes.
+It covers: home screen → **how it works** (forwarding → SignalWire → Gemini 3.8 Live talks to the caller, Gemini 4 Hydrogen flags warning signs, Gemini 4 Neon decides) → a scam call screened live → **SCAM** verdict → Block → a real caller → **REAL** verdict → call history with reasons → Demo / Simulation / Live modes → "powered by Gemini" end card. The waiting parts of each call play at 1.75× so there are no dead pauses.
 
-Stills for slides are in [`screenshots/`](screenshots) (full iPhone resolution).
+Stills for slides are in [`screenshots/`](screenshots): the workflow diagram, the end card, and the app screens at full iPhone resolution.
 
 ## Rebuild it
 
@@ -19,8 +19,9 @@ Stills for slides are in [`screenshots/`](screenshots) (full iPhone resolution).
    ```bash
    node --env-file=.env demo/make-audio.mjs
    ```
-3. Edit: set `START` in `make-video.mjs` to the second where the tour's home screen appears in `raw.mov`, then:
+3. Edit: the segment times in `make-video.mjs` point into `raw.mov` (check them if you re-record), then:
    ```bash
+   cd demo && npm install && cd ..   # once: the SVG renderer for the diagram and panels
    node demo/make-video.mjs
    ```
 

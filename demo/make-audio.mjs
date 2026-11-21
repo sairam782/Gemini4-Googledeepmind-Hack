@@ -3,7 +3,7 @@
 //   node --env-file=.env demo/make-audio.mjs
 // Output: demo/work/vo-*.mp3 and demo/work/sfx-*.mp3 (git-ignored); make-video.sh mixes them.
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 
 const KEY = process.env.ELEVENLABS_API_KEY;
 if (!KEY) throw new Error('Set ELEVENLABS_API_KEY in .env');
@@ -14,14 +14,13 @@ mkdirSync(OUT, { recursive: true });
 // Narration, one line per moment in the screen recording (see make-video.sh for timings).
 export const LINES = {
   intro: 'Scam calls keep getting smarter. Uno ReVoice answers them for you.',
-  screen: 'A Gemini agent picks up unknown callers.',
-  live: 'You follow the call live, and warning signs pop up as they talk.',
-  scam: 'Fake I.R.S., gift cards, threats. Scam.',
-  block: 'One tap blocks the number.',
-  real: 'Real callers get through. Maya just wants a callback.',
-  verdict: 'Verdict: real. Join or end the call anytime.',
+  flow: 'Unknown calls are forwarded to our agent. Gemini 3.8 Live talks to the caller, Gemini 4 Hydrogen flags warning signs, and Gemini 4 Neon makes the call: scam, or real.',
+  call: 'You watch it live: the transcript, and every warning sign Hydrogen spots.',
+  scam2: "Neon's verdict: scam. One tap blocks the number.",
+  real2: 'Real callers get through. Maya agrees to a callback, so Neon says real.',
+  join: 'Join or end the call anytime.',
   history: 'Every call is saved, with the verdict and the reasons.',
-  outro: 'Try it in demo, or on real forwarded calls.',
+  outro2: 'Demo, simulation, or real forwarded calls. Uno ReVoice, powered by Gemini.',
 };
 
 const SFX = {
@@ -43,7 +42,10 @@ async function post(path, body) {
   return Buffer.from(await res.arrayBuffer());
 }
 
+const have = (f) => existsSync(f);
+
 for (const [name, text] of Object.entries(LINES)) {
+  if (have(`${OUT}/vo-${name}.mp3`)) continue; // delete a file to regenerate it
   const mp3 = await post(`/v1/text-to-speech/${VOICE}?output_format=mp3_44100_128`, {
     text,
     model_id: 'eleven_multilingual_v2',
@@ -54,6 +56,7 @@ for (const [name, text] of Object.entries(LINES)) {
 }
 
 for (const [name, [text, seconds]] of Object.entries(SFX)) {
+  if (have(`${OUT}/sfx-${name}.mp3`)) continue;
   const mp3 = await post('/v1/sound-generation', { text, duration_seconds: seconds, prompt_influence: 0.6 });
   writeFileSync(`${OUT}/sfx-${name}.mp3`, mp3);
   console.log(`sfx    ${name}`);

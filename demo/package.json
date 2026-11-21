@@ -1,0 +1,13 @@
+{
+  "name": "uno-revoice-demo-video",
+  "private": true,
+  "type": "module",
+  "description": "Builds the demo video (not part of the app).",
+  "scripts": {
+    "audio": "cd .. && node --env-file=.env demo/make-audio.mjs",
+    "video": "cd .. && node demo/make-video.mjs"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "2.6.2"
+  }
+}

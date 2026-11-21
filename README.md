@@ -8,7 +8,7 @@ Unknown caller ──► Alex's phone declines it (Android) / silences it (iPhon
                         └─► the agent answers ──► server ──WebSocket──► phone app
 ```
 
-**Demo video:** [`demo/uno-revoice-demo.mp4`](demo/uno-revoice-demo.mp4) (58 s), with stills in [`demo/screenshots/`](demo/screenshots).
+**Demo video:** [`demo/uno-revoice-demo.mp4`](demo/uno-revoice-demo.mp4) (55 s), with stills in [`demo/screenshots/`](demo/screenshots).
 
 ## What's in this repo
 
