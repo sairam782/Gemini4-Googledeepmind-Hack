@@ -272,6 +272,29 @@ The iPhone/Android app (Expo, at the repo root) shows each screened call live (t
 
 **Demo video:** [`demo/uno-revoice-demo.mp4`](demo/uno-revoice-demo.mp4) (55 s), with stills in [`demo/screenshots/`](demo/screenshots).
 
+## The workflow in screenshots
+
+![How Uno ReVoice works](demo/screenshots/00-how-it-works.png)
+
+<table>
+  <tr>
+    <td align="center" width="20%"><img src="demo/screenshots/live-01-ready.png" width="190" alt="Agent ready to screen calls"></td>
+    <td align="center" width="20%"><img src="demo/screenshots/live-02-screening.png" width="190" alt="Agent screening a live call"></td>
+    <td align="center" width="20%"><img src="demo/screenshots/live-03-scam-alert.png" width="190" alt="Scam alert during the call"></td>
+    <td align="center" width="20%"><img src="demo/screenshots/06-history.png" width="190" alt="Call history with verdicts"></td>
+    <td align="center" width="20%"><img src="demo/screenshots/07-setup-modes.png" width="190" alt="Setup with Demo, Simulation and Live modes"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>1. Ready</b><br>Live mode, connected to the phone server.</td>
+    <td align="center"><b>2. Screening</b><br>Gemini 3.8 Live talks to the caller; Hydrogen flags signs and suggests replies.</td>
+    <td align="center"><b>3. Scam alert</b><br>Neon decides "scam": hang up, block, or keep listening.</td>
+    <td align="center"><b>4. History</b><br>Every call saved with its verdict, reasons and blocked numbers.</td>
+    <td align="center"><b>5. Setup</b><br>Switch between Demo, Simulation and Live.</td>
+  </tr>
+</table>
+
+Screens 1 to 3 are from a Live-mode test call (a simulated SignalWire stream into the real phone server and Gemini models); 4 and 5 are from Demo mode.
+
 ## Repo map
 
 | Folder | What it is | Run it |
