@@ -288,7 +288,8 @@ Each folder installs on its own. The root `package.json` belongs to the phone ap
 
 | Part | State |
 | --- | --- |
-| Phone app | Built: Live call, History and Setup screens, demo calls, Android call check, forwarding codes, push handling. |
+| Phone app | Built: Live call, History and Setup screens, Demo / Simulation / Live modes, suggested replies, scam alert, Android call check, forwarding codes, push handling. |
+| Live mode (real calls) | **Tested on real calls** to the SignalWire number: Gemini 3.8 Live answers, the transcript, warning signs (Gemini 4 Hydrogen), suggested replies and the SCAM verdict (Gemini 4 Neon) reach the app live; End and the scam alert work. **Carrier forwarding** from a personal number is set up but not yet tested end to end. |
 | Agent server + brain | Built in `server/`: 56/56 evals pass on the 8 scripted calls (see below). |
 | **Two servers, on purpose** | **Live** mode talks to `twilio-server/` (SignalWire + Gemini Live) using the [phone app contract](#phone-app-server-contract). **Simulation** mode and the web test desk talk to `server/` over `/ws` with `shared/brain.ts` events. See [Modes](#modes). |
 
@@ -305,7 +306,7 @@ Navy ink `#141A33`, red `#C8372D` (the "Re" and the phone) and warm cream `#FFF4
 
 | Screen | What it shows |
 | --- | --- |
-| **Live call** | Caller number, a large verdict card (Scam / Real / Unsure), warning signs, the transcript as chat bubbles, and Join · End · Block buttons. With no call in progress, it offers two demo calls. |
+| **Live call** | Logo and mode badge, caller number, a compact verdict card (Scam / Real / Unsure, top reasons), warning signs as a swipeable row of chips, the transcript as chat bubbles, **suggested replies**, a Steer box, and Join · End · Block buttons. With no call in progress it shows the buttons for the current mode. |
 | **History** | Past screened calls with their verdict and reasons, plus blocked numbers. |
 | **Setup** | Your phone number, the forwarding code for your carrier, the call check (Android) or Silence Unknown Callers steps (iPhone), and the server address. |
 
@@ -346,7 +347,14 @@ Setup → **Mode** (top of the screen). A small badge on the Live call screen sh
 | **Simulation** | A Gemini-played caller on the team's agent server (`server/`), started from the phone or the web desk | `http://localhost:8787` (Setup → Simulation server address) | Incoming scam / real call |
 | **Live** (default) | Real calls forwarded to the SignalWire number +1 208 485 0663 | `twilio-server/` via ngrok (Setup → Phone server address) | – (calls arrive on their own) |
 
-All three feed the same events (`call.started`, `transcript`, `signal`, `verdict`, `call.ended`) into the same Live call screen. **Join · End · Block** work in every mode; **Steer** (a private instruction for the agent's next line, `POST /api/calls/:callId/say`) appears on Live calls. The team server has no free-text steering, so Simulation calls don't show it.
+All three feed the same events (`call.started`, `transcript`, `signal`, `directions`, `verdict`, `call.ended`) into the same Live call screen. **Join · End · Block** work in every mode; **Steer** (a private instruction for the agent's next line, `POST /api/calls/:callId/say`) appears on Live calls. The team server has no free-text steering, so Simulation calls don't show it.
+
+### During a call
+
+- **Suggested replies.** After each caller line, Gemini proposes up to 3 next lines (a short label plus the exact words). Tap one and the agent says it next. Live: Gemini 4 Hydrogen writes them in the same request as the warning-sign check; the server sends them to Gemini Live as `{ text, exact: true }`. Simulation: the team server's own suggestions (`direction.pick`).
+- **Scam alert.** When the verdict is **scam**, the app pops up "This call is a scam" with the reasons and **Hang up**, **Hang up and block** or **Keep listening**, and sends a notification for when the app is in the background. The app never hangs up on its own: you decide.
+- **When the verdict arrives.** Neon runs as soon as the caller asks for money, gift cards or a code, or after 2 caller lines, and re-checks each new line until it's sure. A Neon check takes about 7 to 8 seconds, so keep a call going for ~10 seconds after the key request.
+- **Agent persona.** The agent introduces itself as "**Ariana**'s AI assistant" (`OWNER_NAME` in `twilio-server/.env`) and always speaks English (`LANGUAGE`, default `en-US`). Caller speech over a poor line can still be transcribed imperfectly.
 
 ### Simulation
 
@@ -437,11 +445,15 @@ iOS doesn't let apps decide per call. Go to **Settings → Apps → Phone → Sc
 - **Faked contact numbers.** A scammer showing a contact's number (for example "Mom") rings normally unless the network marks the caller ID as failed (Android 11+ only). Calls marked "not verified" still ring. On iPhone, every contact rings.
 - **No sign-in.** The app's WebSocket identifies the user only by `?phone=`. Fine for a demo; a real release needs a per-device token.
 - **Only Android decides per call.** iPhone relies on Silence Unknown Callers, so the caller hears a few rings before forwarding.
-- **Twilio free trial.** Only verified numbers can call in or be called, and each call starts with a trial message and a key press.
+- **SignalWire trial.** Only verified numbers can call in or be called (callers and the phone Join rings), each call may start with a short trial message, and calls use trial credit.
+- **Join from the same phone.** Join rings your own number; if you're testing by calling the agent from that same phone, it's busy, and with forwarding on the call can come straight back to the agent. Test Join with the caller on a different phone.
+- **The simulator must stay in front.** In the iOS simulator, a backgrounded app stops updating its screen; keep the app in the foreground during a demo.
+- **Verdict speed.** Gemini 4 Neon takes about 7 to 8 seconds per check, so the scam alert can lag the request that triggered it.
 
 ## Later
 
-- [ ] **Test Live mode end to end** with a real forwarded call (see `twilio-server/README.md`).
+- [ ] **Test carrier forwarding end to end**: a verified teammate calls your phone, you decline (or turn on Airplane Mode), and the call reaches the agent (see `twilio-server/README.md`). Turn forwarding off afterwards (T-Mobile/AT&T: `##004#`).
+- [ ] **Faster scam alert**: queue a Neon re-check instead of skipping it while one is running, and show an instant "likely scam" warning from the regex/Hydrogen signs before Neon confirms.
 - [ ] **Bring back family safe words.** Set `FEATURES.safeWords` to `true` in [`src/constants/features.ts`](src/constants/features.ts). The Setup section, secure storage, upload (`/api/safe-words`) and on-screen masking are already built. The server then needs to store them and give them to the agent, which asks callers who claim to be family. They are stored in the phone's secure storage, sent only over HTTPS, and replaced with `•••` if they appear in a transcript or verdict.
 
 ## Phone app layout
