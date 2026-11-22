@@ -14,7 +14,7 @@ Caller → your carrier forwards it → SignalWire +1 208 485 0663 → POST /voi
 | `src/index.js` | HTTP routes, WebSockets, audio bridge |
 | `src/telephony.js` | Everything SignalWire-specific (cXML, REST, signature, stream messages). Swap this file to go back to Twilio. |
 | `src/agent.js` | Gemini Live session per call: caller audio in, agent audio and transcripts out, steering |
-| `src/brain.js` | Regex signs (instant), Hydrogen signs after each caller line, Neon verdict |
+| `src/brain.js` | Regex signs (instant); Hydrogen after each caller line (warning signs + 3 suggested replies, as `directions` events); Neon verdict as soon as money/codes come up or after 2 caller lines, re-checked until sure, plus a final verdict at hang-up |
 | `src/calls.js` | Call state, app sockets, devices, Expo push, block list (`data/`) |
 | `src/audio.js` | µ-law ⇄ PCM16, resampling, WAV |
 | `scripts/sim.js` | Fake SignalWire call for testing without a phone |
@@ -29,6 +29,8 @@ npm start                # or: npm run dev (restarts on file changes)
 ```
 
 Never commit `.env` (it's git-ignored) and never paste its values into chat.
+
+Other settings: `OWNER_NAME` (default `Ariana`) is the name the agent screens for ("Ariana's AI assistant"); `LANGUAGE` (default `en-US`) pins the agent's spoken language. The space can be set as `SIGNALWIRE_SPACE_URL` or `SIGNALWIRE_SPACE`. Use `@google/genai` 1.52.0 as pinned: 3.x fails to open Live sessions with these keys.
 
 ## Test without a phone
 
@@ -69,11 +71,11 @@ On iPhone also turn on **Settings → Apps → Phone → Screen Unknown Callers 
 | `POST /voice/status` | SignalWire form | Sends `call.ended` when the call is over |
 | `POST /voice/join?phone=` | SignalWire form | cXML `<Dial>` to the user's phone (target of Join's redirect) |
 | `WS /media` | SignalWire stream | Audio bridge to Gemini Live |
-| `WS /app?phone=` | – | Events to the app: `call.started`, `transcript`, `signal`, `verdict`, `call.ended` |
+| `WS /app?phone=` | – | Events to the app: `call.started`, `transcript`, `signal`, `directions` (suggested replies), `verdict`, `call.ended` |
 | `POST /api/device` | `phone, pushToken, platform` | Saves the phone; Expo push on each new call |
 | `POST /api/calls/:id/join` | `phone` | Stops the agent and redirects the call to ring `phone` |
 | `POST /api/calls/:id/end` | – | Hangs up |
-| `POST /api/calls/:id/say` | `text` | Steering: a private instruction for the agent's next line |
+| `POST /api/calls/:id/say` | `text`, `exact` | Steering: a private instruction for the agent's next line. With `exact: true` (suggested replies) the agent says `text` word for word. Sent to Gemini Live as realtime text input. |
 | `POST /api/block` | `phone, number, callId` | Adds `number` to the block list (`data/blocked.json`) |
 | `GET /api/health` | – | Status and live call IDs |
 
