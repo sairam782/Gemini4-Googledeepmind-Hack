@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" font-family="Inter, 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#8a817a"/></marker>
+    <marker id="arg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f8a5b"/></marker>
+    <style>
+      .h { font-size: 24px; font-weight: 700; fill: #1d1b1a; }
+      .m { font-size: 15px; font-weight: 600; fill: #e2553f; }
+      .s { font-size: 16px; fill: #5f5853; }
+      .lane { font-size: 17px; fill: #1d1b1a; }
+      .lane b, .b { font-weight: 700; }
+      .card { fill: #fff; stroke: #e2dcd5; stroke-width: 2; }
+      .line { stroke: #8a817a; stroke-width: 3; fill: none; marker-end: url(#ar); }
+      .loop { stroke: #1f8a5b; stroke-width: 3; fill: none; stroke-dasharray: 10 8; marker-end: url(#arg); }
+    </style>
+  </defs>
+  <rect width="1600" height="900" fill="#fbfaf8"/>
+
+  <text x="60" y="80" font-size="40" font-weight="700" fill="#1d1b1a"><tspan fill="#e2553f">Uno</tspan> Re<tspan fill="#1f8a5b">Voice</tspan></text>
+  <text x="60" y="118" class="s" font-size="20">An AI you hand a suspicious call to. Models suggest, code checks, Alex decides.</text>
+
+  <!-- 1 caller -->
+  <rect class="card" x="60" y="250" width="220" height="200" rx="18"/>
+  <text x="170" y="300" class="h" text-anchor="middle">Caller</text>
+  <text x="170" y="336" class="s" text-anchor="middle">phone, mic</text>
+  <text x="170" y="360" class="s" text-anchor="middle">or demo caller</text>
+  <text x="170" y="410" class="m" text-anchor="middle">Transcribe Live</text>
+  <text x="170" y="430" class="s" font-size="13" text-anchor="middle">speech → text</text>
+
+  <!-- 2 brain -->
+  <rect class="card" x="350" y="180" width="460" height="340" rx="18"/>
+  <text x="380" y="224" class="h">The brain</text>
+  <text x="380" y="250" class="s" font-size="14">every caller line, all at once</text>
+  <text x="380" y="300" class="lane"><tspan class="b">Rules</tspan> · instant red flags</text>
+  <text x="380" y="340" class="lane"><tspan class="b" fill="#e2553f">Flash-Lite</tspan> · quick replies (~1 s)</text>
+  <text x="380" y="380" class="lane"><tspan class="b" fill="#e2553f">Hydrogen</tspan> · spots risks (stage 1)</text>
+  <text x="380" y="420" class="lane"><tspan class="b" fill="#e2553f">Argon</tspan> · plans the best reply</text>
+  <text x="380" y="460" class="lane"><tspan class="b" fill="#e2553f">Neon</tspan> · double-checks (stage 2)</text>
+
+  <!-- 3 code -->
+  <rect x="880" y="250" width="240" height="200" rx="18" fill="#f4f1ed" stroke="#1d1b1a" stroke-width="2.5"/>
+  <text x="1000" y="300" class="h" text-anchor="middle">Safety code</text>
+  <text x="1000" y="340" class="s" text-anchor="middle">risk score + lock</text>
+  <text x="1000" y="366" class="s" text-anchor="middle">no codes, no payments,</text>
+  <text x="1000" y="392" class="s" text-anchor="middle">never pretends</text>
+  <text x="1000" y="418" class="s" text-anchor="middle">to be Alex</text>
+
+  <!-- 4 alex + voice -->
+  <rect x="1190" y="180" width="350" height="160" rx="18" fill="#eef8f2" stroke="#1f8a5b" stroke-width="2.5"/>
+  <text x="1220" y="226" class="h">Alex decides</text>
+  <text x="1220" y="262" class="s">sees risks + suggested replies</text>
+  <text x="1220" y="290" class="s">taps "take over" or takes back</text>
+  <rect class="card" x="1190" y="380" width="350" height="140" rx="18"/>
+  <text x="1220" y="426" class="h">Agent speaks</text>
+  <text x="1220" y="456" class="m">Flash TTS</text>
+  <text x="1220" y="484" class="s">calm voice, replies in ~3 s</text>
+
+  <path class="line" d="M280 350 H346"/>
+  <path class="line" d="M810 350 H876"/>
+  <path class="line" d="M1120 330 L1186 280"/>
+  <path class="line" d="M1120 370 L1186 430"/>
+
+  <!-- learning -->
+  <rect x="350" y="620" width="1190" height="190" rx="18" fill="#f2f9f5" stroke="#1f8a5b" stroke-width="2.5"/>
+  <text x="380" y="666" class="h" fill="#1f8a5b">It learns after every call</text>
+  <rect class="card" x="380" y="692" width="330" height="92" rx="14"/>
+  <text x="400" y="728" class="lane"><tspan class="b" fill="#e2553f">Carbon</tspan> · reviews the call</text>
+  <text x="400" y="758" class="s" font-size="14">summary, verdict, next steps</text>
+  <rect class="card" x="770" y="692" width="330" height="92" rx="14"/>
+  <text x="790" y="728" class="lane"><tspan class="b" fill="#e2553f">Neon critic</tspan> · grades it</text>
+  <text x="790" y="758" class="s" font-size="14">writes lessons</text>
+  <rect class="card" x="1160" y="692" width="350" height="92" rx="14"/>
+  <text x="1180" y="728" class="lane"><tspan class="b">Playbook</tspan> · checked by code</text>
+  <text x="1180" y="758" class="s" font-size="14">safety rules can never change</text>
+  <path class="line" d="M710 738 H766"/>
+  <path class="line" d="M1100 738 H1156"/>
+  <path class="loop" d="M580 620 V524"/>
+  <text x="596" y="580" class="s" font-weight="600" fill="#1f8a5b">next call starts smarter</text>
+
+  <text x="60" y="860" class="s" font-size="14">7 Gemini models · <tspan fill="#e2553f" font-weight="600">red names</tspan> are Gemini (3.5 / 3.8 / Gemini 4)</text>
+</svg>

@@ -261,7 +261,11 @@ export function DeskPage() {
         // Streams: sound starts ~0.8 s after the line is picked instead of after the whole clip renders.
         result = await player().speak(text, AGENT_VOICE, () => {
           if (!isCurrent()) return;
-          if (refs.current.tapAt) setM((x) => ({ ...x, tapToAudio: Math.round(performance.now() - refs.current.tapAt) }));
+          if (refs.current.tapAt) {
+            const ms = Math.round(performance.now() - refs.current.tapAt);
+            refs.current.tapAt = 0; // measure the tap's own line, not later auto lines
+            setM((x) => ({ ...x, tapToAudio: ms }));
+          }
           send({ type: "desk.agentPlaying", turnId });
         });
         if (!isCurrent()) return;
